@@ -2,10 +2,13 @@
 
 ## Status
 
-Implemented: `make build` (tidy, lint, test, binary) passes clean, 94.7%
+**Phase 1:** `make build` (tidy, lint, test, binary) passes clean, 94.7%
 coverage on `pkg/render`. Not yet built into a released image, not yet
 pushed to a remote, not yet wired end-to-end into a live
 `ai-gateway-operator` reconcile (see "Out of scope").
+
+**Phase 2 (EA2):** `ExternalModel` / `ExternalProvider` reconciliation and
+multi-tenant fan-out — in progress.
 
 ## Purpose
 
@@ -30,8 +33,11 @@ dataplane. 3.5 ships only `maas-controller` + IPP; see
 [Deployment architecture](#deployment-architecture).
 
 **Phase 1 (implemented today)** vendors and installs `praxis-extproc`
-manifests only. `ExternalModel` watch and multi-tenant fan-out are the next
-control-plane milestones (see [Scope](#scope)).
+manifests only.
+
+**Phase 2 (EA2, in progress)** adds `ExternalModel` / `ExternalProvider` watch,
+dynamic per-model config generation, and multi-tenant fan-out via
+`MaasTenantConfig` / `AITenant` (see [Scope](#scope)).
 
 ## Deployment architecture
 
@@ -95,7 +101,7 @@ flowchart TD
 - **Control-plane / dataplane split (replaces IPP's dual role):**
   - **`ai-gateway-controller`** — deployment and reconciling of external models (per-model config generation, formerly in IPP).
   - **Praxis (`praxis-extproc`)** — ExtProc dataplane only.
-- **`AITenant` selects the dataplane backend per tenant (at least for EA2):**
+- **`AITenant` selects the dataplane backend per tenant (EA2 / Phase 2):**
   - New field (or equivalent) on `AITenant` to choose **Praxis** (`praxis-extproc`, via `ai-gateway-controller`) vs **IPP** (`payload-processing`, legacy MaaS path).
   - Required so 3.6 can support both backends during the Praxis migration.
 - **Multi-tenancy works the same way it does today:**
@@ -122,7 +128,7 @@ resync interval. There is no CR watch in Phase 1; all configuration
 
 ## Scope
 
-### In scope (this repo, Phase 1)
+### Phase 1 — `praxis-extproc` install (implemented)
 
 - Vendor `deploy/overlays/odh` from `opendatahub-io/praxis-extproc@main` at a
   pinned commit (`hack/scripts/get-manifests.sh`) into
@@ -136,16 +142,16 @@ resync interval. There is no CR watch in Phase 1; all configuration
   (`ai-gateway-controller`).
 - PR/CI conventions — see [CONTRIBUTING.md](./CONTRIBUTING.md).
 
-### Out of scope (explicitly deferred)
+### Phase 2 — external models + multi-tenancy (EA2, in progress)
 
 - `ExternalModel` / `ExternalProvider` watch and dynamic per-model config
-  generation — **not** in `maas-controller` today; lives in IPP and moves
-  here as the full control-plane replacement. Praxis handles the dataplane.
-  Deferred past Phase 1 (see [Purpose](#purpose)).
-- Multi-tenant fan-out (`MaasTenantConfig` / `AITenant`) — expected to work
-  the same way it does today (per-tenant namespace, gateway binding, and
-  dataplane install). `AITenant` will determine whether a tenant uses Praxis
-  or IPP (at least for EA2). Deferred past Phase 1.
+  generation — full control-plane replacement for IPP (Praxis handles the
+  dataplane). **Not** in `maas-controller` today; lives in IPP and moves here.
+- Multi-tenant fan-out (`MaasTenantConfig` / `AITenant`) — same tenancy model
+  as today (per-tenant namespace, gateway binding, and dataplane install).
+  `AITenant` determines whether a tenant uses Praxis or IPP.
+
+### Out of scope (explicitly deferred)
 - Watching `AIGateway` (or any CR). Revisit once `AIGatewaySpec` gains a
   field relevant to this controller (today it only has `BatchGateway` and
   `ModelsAsAService` toggles).
@@ -160,8 +166,10 @@ resync interval. There is no CR watch in Phase 1; all configuration
 
 ## Dependencies
 
-No CR watch means no cross-repo Go type imports (no dependency on
-`ai-gateway-operator/api/...` or `models-as-a-service/...`). Only:
+Phase 1 has no CR watch, so no cross-repo Go type imports (no dependency on
+`ai-gateway-operator/api/...` or `models-as-a-service/...`). Phase 2 will
+add watches for `ExternalModel`, `ExternalProvider`, and tenant-scoped CRs.
+Today only:
 
 - `sigs.k8s.io/controller-runtime` (client + manager, leader election, health
   endpoints)
