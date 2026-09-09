@@ -22,6 +22,8 @@ fi
 
 source "$PROJECT_ROOT/scripts/deployment-helpers.sh"
 source "$PROJECT_ROOT/test/e2e/scripts/auth_utils.sh"
+# shellcheck disable=SC1091
+source "$PROJECT_ROOT/test/e2e/scripts/maas-image-defaults.sh"
 
 SKIP_DEPLOYMENT=${SKIP_DEPLOYMENT:-false}
 SKIP_VALIDATION=${SKIP_VALIDATION:-false}
@@ -29,13 +31,13 @@ SKIP_AUTH_CHECK=${SKIP_AUTH_CHECK:-true}
 INSECURE_HTTP=${INSECURE_HTTP:-false}
 EXTERNAL_OIDC=false
 
-export MAAS_API_IMAGE=${MAAS_API_IMAGE:-}
-export MAAS_CONTROLLER_IMAGE=${MAAS_CONTROLLER_IMAGE:-}
+export MAAS_API_IMAGE
+export MAAS_CONTROLLER_IMAGE
 export AI_GATEWAY_OPERATOR_IMAGE=${AI_GATEWAY_OPERATOR_IMAGE:-}
-export AI_GATEWAY_CONTROLLER_IMAGE=${AI_GATEWAY_CONTROLLER_IMAGE:-}
+export AI_GATEWAY_CONTROLLER_IMAGE
 export OPERATOR_CATALOG=${OPERATOR_CATALOG:-}
 export OPERATOR_IMAGE=${OPERATOR_IMAGE:-}
-DEPLOY_MODE=${DEPLOY_MODE:-kustomize}
+DEPLOY_MODE=${DEPLOY_MODE:-operator}
 export POLICY_ENGINE="${POLICY_ENGINE:-rhcl}"
 export RHCL_NAMESPACE="${RHCL_NAMESPACE:-kuadrant-system}"
 export RHCL_STARTING_CSV="${RHCL_STARTING_CSV:-}"
@@ -90,6 +92,9 @@ check_prerequisites() {
         exit 1
     fi
     echo "Prerequisites met — logged in as: $current_user"
+    echo "DEPLOY_MODE: ${DEPLOY_MODE}"
+    echo "MAAS_API_IMAGE: ${MAAS_API_IMAGE}"
+    echo "MAAS_CONTROLLER_IMAGE: ${MAAS_CONTROLLER_IMAGE}"
     echo "AI_GATEWAY_CONTROLLER_IMAGE: ${AI_GATEWAY_CONTROLLER_IMAGE}"
 }
 

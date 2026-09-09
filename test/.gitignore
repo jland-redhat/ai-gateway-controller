@@ -1,3 +1,5 @@
 # Test run artifacts — keep directories, ignore contents
 **/artifacts/*
 !**/artifacts/.gitkeep
+**/reports/*
+!**/reports/.gitkeep
