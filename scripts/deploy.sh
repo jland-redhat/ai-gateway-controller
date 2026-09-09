@@ -609,8 +609,13 @@ main() {
   local config_dir="$project_root/deployment/base/maas-controller/default"
 
   if [[ ! -d "$controller_dir" ]]; then
-    log_error "maas-controller directory not found at $controller_dir — controller is required"
-    return 1
+    # ai-gateway-controller: operator mode without local maas-controller tree
+    if [[ "$DEPLOYMENT_MODE" == "operator" ]]; then
+      log_info "  maas-controller source tree not present; relying on operator-managed deployment"
+    else
+      log_error "maas-controller directory not found at $controller_dir — controller is required"
+      return 1
+    fi
   fi
 
   if ! kubectl get namespace "$NAMESPACE" &>/dev/null; then

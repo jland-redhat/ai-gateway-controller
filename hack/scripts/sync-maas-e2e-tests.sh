@@ -39,6 +39,8 @@ PRESERVE_PATHS=(
   "test/e2e/scripts/prow_run_ai_gateway_controller_test.sh"
   "test/e2e/scripts/run_e2e_tests.sh"
   "test/e2e/scripts/deploy-ai-gateway-controller.sh"
+  "test/e2e/scripts/deploy-platform.sh"
+  "test/e2e/scripts/maas-image-defaults.sh"
 )
 
 MANIFEST_FILE="${PROJECT_ROOT}/test/.maas-sync-manifest"
@@ -91,4 +93,5 @@ preserve_local_scripts() {
 
 preserve_local_scripts
 fetch_maas
+"${SCRIPT_DIR}/patch-maas-deploy-for-aigc.sh"
 echo "MaaS e2e sync complete."

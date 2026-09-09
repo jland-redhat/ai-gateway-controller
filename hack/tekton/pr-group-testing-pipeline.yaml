@@ -252,6 +252,11 @@ spec:
               echo "AI_GATEWAY_CONTROLLER_IMAGE=${AI_GATEWAY_CONTROLLER_IMAGE}"
               echo "AI_GATEWAY_CONTROLLER_IMAGE (tag): ${AI_GATEWAY_CONTROLLER_IMAGE%%@*}:${AIGC_TAG}"
 
+              export MAAS_API_IMAGE="${MAAS_API_IMAGE:-quay.io/opendatahub/maas-api:latest}"
+              export MAAS_CONTROLLER_IMAGE="${MAAS_CONTROLLER_IMAGE:-quay.io/opendatahub/maas-controller:latest}"
+              echo "MAAS_API_IMAGE=${MAAS_API_IMAGE}"
+              echo "MAAS_CONTROLLER_IMAGE=${MAAS_CONTROLLER_IMAGE}"
+
               ./test/e2e/scripts/prow_run_ai_gateway_controller_test.sh
 
               echo "success" > "$STATUS_FILE"
