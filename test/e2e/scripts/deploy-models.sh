@@ -26,7 +26,11 @@ MODEL_NAMESPACE="${MODEL_NAMESPACE:-llm}"
 
 wait_for_auth_policies_enforced() {
     local timeout="$AUTHPOLICY_TIMEOUT"
-    echo "Waiting for Kuadrant AuthPolicies to be enforced (timeout: ${timeout}s)..."
+    # Only MaaS-managed policies (maas-controller label). Clusters with legacy ODH
+    # AIGateway AuthPolicies (e.g. openshift-ai-inference-authn) may stay Enforced=False
+    # when not on an active route path — those must not block MaaS e2e.
+    local label_selector="${AUTHPOLICY_LABEL_SELECTOR:-app.kubernetes.io/managed-by=maas-controller}"
+    echo "Waiting for MaaS Kuadrant AuthPolicies to be enforced (selector: ${label_selector}, timeout: ${timeout}s)..."
 
     local llm_namespaces
     llm_namespaces=$(oc get llminferenceservices -A -o jsonpath='{range .items[*]}{.metadata.namespace}{"\n"}{end}' 2>/dev/null | sort -u)
@@ -43,17 +47,17 @@ wait_for_auth_policies_enforced() {
                 if [[ "$status" != "True" ]]; then
                     all_enforced=false
                 fi
-            done < <(oc get authpolicies -n "$ns" -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Enforced")].status}{"\n"}{end}' 2>/dev/null)
+            done < <(oc get authpolicies -n "$ns" -l "$label_selector" -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Enforced")].status}{"\n"}{end}' 2>/dev/null)
         done
         if $all_enforced && [[ $total -gt 0 ]]; then
-            echo "✅ All AuthPolicies enforced ($total policies)"
+            echo "✅ All MaaS AuthPolicies enforced ($total policies)"
             return 0
         fi
-        echo "  Waiting... ($total policies found, not all enforced yet)"
+        echo "  Waiting... ($total MaaS policies found, not all enforced yet)"
         sleep 10
     done
-    echo "❌ ERROR: AuthPolicies not all enforced after ${timeout}s"
-    oc get authpolicies -A -o wide 2>/dev/null || true
+    echo "❌ ERROR: MaaS AuthPolicies not all enforced after ${timeout}s"
+    oc get authpolicies -A -l "$label_selector" -o wide 2>/dev/null || true
     return 1
 }
 
