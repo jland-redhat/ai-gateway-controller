@@ -32,21 +32,63 @@ wait_subscription() {
   kubectl wait -n "$ns" --for=jsonpath='{.status.phase}'=Succeeded csv "$csv" --timeout=300s
 }
 
+apply_cert_manager_subscription() {
+  if kubectl get operatorgroup -n cert-manager-operator --no-headers 2>/dev/null | grep -q .; then
+    echo "  OperatorGroup already present in cert-manager-operator; applying Namespace + Subscription only"
+    kubectl apply -f - <<'EOF'
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cert-manager-operator
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: openshift-cert-manager-operator
+  namespace: cert-manager-operator
+spec:
+  channel: stable-v1
+  installPlanApproval: Automatic
+  name: openshift-cert-manager-operator
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+EOF
+    return
+  fi
+  kubectl apply -f "${DATA_DIR}/cert-manager-subscription.yaml"
+}
+
+cert_manager_operational() {
+  kubectl get deployment -n cert-manager-operator cert-manager-operator-controller-manager -o jsonpath='{.status.availableReplicas}' 2>/dev/null | grep -q '[1-9]'
+}
+
+lws_operational() {
+  kubectl get csv -n openshift-lws-operator leader-worker-set.v1.0.0 -o jsonpath='{.status.phase}' 2>/dev/null | grep -q Succeeded
+}
+
 echo "=== Installing cert-manager and LeaderWorkerSet operators ==="
 echo ""
 
 # 1. cert-manager (required first)
-echo "1. Installing cert-manager operator..."
-kubectl apply -f "${DATA_DIR}/cert-manager-subscription.yaml"
-wait_subscription "cert-manager-operator" "openshift-cert-manager-operator"
-echo "   cert-manager ready."
+if cert_manager_operational; then
+  echo "1. cert-manager operator already running; skipping install."
+else
+  echo "1. Installing cert-manager operator..."
+  apply_cert_manager_subscription
+  wait_subscription "cert-manager-operator" "openshift-cert-manager-operator"
+  echo "   cert-manager ready."
+fi
 echo ""
 
 # 2. LeaderWorkerSet
-echo "2. Installing LeaderWorkerSet operator..."
-kubectl apply -f "${DATA_DIR}/lws-subscription.yaml"
-wait_subscription "openshift-lws-operator" "leader-worker-set"
-echo "   LeaderWorkerSet operator ready."
+if lws_operational; then
+  echo "2. LeaderWorkerSet operator already installed; skipping install."
+else
+  echo "2. Installing LeaderWorkerSet operator..."
+  kubectl apply -f "${DATA_DIR}/lws-subscription.yaml"
+  wait_subscription "openshift-lws-operator" "leader-worker-set"
+  echo "   LeaderWorkerSet operator ready."
+fi
 echo ""
 
 # 3. Activate LWS API (LeaderWorkerSetOperator CR)

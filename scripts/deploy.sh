@@ -609,11 +609,13 @@ main() {
   local config_dir="$project_root/deployment/base/maas-controller/default"
 
   if [[ ! -d "$controller_dir" ]]; then
-    # ai-gateway-controller: operator mode without local maas-controller tree
+    # ai-gateway-controller: no local maas-controller/ tree
     if [[ "$DEPLOYMENT_MODE" == "operator" ]]; then
       log_info "  maas-controller source tree not present; relying on operator-managed deployment"
+    elif [[ -d "${project_root}/deployment/base/maas-controller" ]]; then
+      log_info "  maas-controller source tree not present; using synced deployment/ manifests (kustomize mode)"
     else
-      log_error "maas-controller directory not found at $controller_dir — controller is required"
+      log_error "maas-controller directory not found at $controller_dir — run sync-maas-e2e-tests.sh (needs deployment/)"
       return 1
     fi
   fi
@@ -1046,7 +1048,18 @@ deploy_keycloak() {
 install_optional_operators() {
   log_info "Installing optional operators in parallel..."
 
+
   local data_dir="${SCRIPT_DIR}/data"
+
+  # ai-gateway-controller: skip optional operators when already installed
+  if kubectl get deployment -n cert-manager-operator cert-manager-operator-controller-manager -o jsonpath='{.status.availableReplicas}' 2>/dev/null | grep -q '[1-9]' \
+    && kubectl get csv -n openshift-lws-operator leader-worker-set.v1.0.0 -o jsonpath='{.status.phase}' 2>/dev/null | grep -q Succeeded; then
+    log_info "cert-manager and LWS already installed; skipping subscription apply"
+    log_info "Activating LeaderWorkerSet API..."
+    kubectl apply -f "${data_dir}/lws-operator-cr.yaml"
+    log_info "Optional operators installed"
+    return 0
+  fi
 
   # Apply both subscriptions in parallel (they're independent)
   log_info "Applying cert-manager and LeaderWorkerSet subscriptions..."
@@ -1541,7 +1554,7 @@ apply_kuadrant_cr() {
     fi
   fi
 
-  INGRESS_MODE="${INGRESS_MODE:-route}" \
+  INGRESS_MODE="${INGRESS_MODE:-loadbalancer}" \
   DISCONNECTED="${DISCONNECTED:-false}" \
   CLUSTER_DOMAIN="${CLUSTER_DOMAIN:-}" \
   CERT_NAME="${CERT_NAME:-}" \

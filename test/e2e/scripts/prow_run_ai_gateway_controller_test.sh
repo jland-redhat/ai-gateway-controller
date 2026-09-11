@@ -20,6 +20,9 @@ if [[ ! -f "${PROJECT_ROOT}/scripts/deployment-helpers.sh" ]]; then
   exit 1
 fi
 
+POD_TIMEOUT=${POD_TIMEOUT:-600}
+export POD_TIMEOUT
+
 source "$PROJECT_ROOT/scripts/deployment-helpers.sh"
 source "$PROJECT_ROOT/test/e2e/scripts/auth_utils.sh"
 # shellcheck disable=SC1091
@@ -37,7 +40,7 @@ export AI_GATEWAY_OPERATOR_IMAGE=${AI_GATEWAY_OPERATOR_IMAGE:-}
 export AI_GATEWAY_CONTROLLER_IMAGE
 export OPERATOR_CATALOG=${OPERATOR_CATALOG:-}
 export OPERATOR_IMAGE=${OPERATOR_IMAGE:-}
-DEPLOY_MODE=${DEPLOY_MODE:-operator}
+DEPLOY_MODE=${DEPLOY_MODE:-kustomize}
 export POLICY_ENGINE="${POLICY_ENGINE:-rhcl}"
 export RHCL_NAMESPACE="${RHCL_NAMESPACE:-kuadrant-system}"
 export RHCL_STARTING_CSV="${RHCL_STARTING_CSV:-}"
@@ -50,7 +53,7 @@ MAAS_SUBSCRIPTION_NAMESPACE="${MAAS_SUBSCRIPTION_NAMESPACE:-models-as-a-service}
 MODEL_NAMESPACE="${MODEL_NAMESPACE:-llm}"
 GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE:-openshift-ingress}"
 GATEWAY_NAME="${GATEWAY_NAME:-maas-default-gateway}"
-INGRESS_MODE="${INGRESS_MODE:-clusterip}"
+INGRESS_MODE="${INGRESS_MODE:-ocproute}"
 export INGRESS_MODE
 ENABLE_TENANT_NAMESPACE_DISCOVERY="${ENABLE_TENANT_NAMESPACE_DISCOVERY:-true}"
 AITENANT_NAMESPACE="${AITENANT_NAMESPACE:-ai-tenants}"

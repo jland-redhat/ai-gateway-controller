@@ -2,7 +2,8 @@
 
 ## Done in this repo
 
-- [x] MaaS e2e sync + operator-mode deploy (no local `maas-controller/` tree)
+- [x] MaaS e2e sync + **kustomize-mode** deploy (prow owns MaaS; no ODH ModelsAsService path)
+- [x] Sync includes `deployment/` manifests from MaaS (no local `maas-controller/` source tree)
 - [x] Default MaaS images: `quay.io/opendatahub/maas-api:latest` and `maas-controller:latest` (main Konflux pushes)
 - [x] PR image: `AI_GATEWAY_CONTROLLER_IMAGE` from Konflux snapshot → `deploy-ai-gateway-controller.sh`
 
@@ -34,8 +35,11 @@ Override MaaS tags with `MAAS_IMAGE_TAG` or explicit `MAAS_*_IMAGE` env vars.
 
 ## Known gaps
 
+- **Deploy mode:** `DEPLOY_MODE=kustomize` (default) — matches MaaS CI (`install-odh.sh` comment: MaaS via kustomize, not operator). Avoids ModelsAsService prerequisite races (`maas-db-config` in wrong ns, Authorino TLS ordering, operator/image skew).
 - Operator has no `RELATED_IMAGE_ODH_AI_GATEWAY_CONTROLLER_IMAGE` — CI installs controller via kustomize and scales down `payload-processing`
-- After `sync-maas-e2e-tests.sh`, `patch-maas-deploy-for-aigc.sh` re-applies deploy.sh operator-mode fix
+- After `sync-maas-e2e-tests.sh`, `patch-maas-deploy-for-aigc.sh` re-applies deploy.sh fixes
+- Cert-manager/LWS: idempotent install skips duplicate OperatorGroups on clusters with prior partial installs
+- User Workload Monitoring warning on showback is non-blocking for e2e
 
 ## Local run
 
