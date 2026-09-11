@@ -257,7 +257,9 @@ spec:
               echo "MAAS_API_IMAGE=${MAAS_API_IMAGE}"
               echo "MAAS_CONTROLLER_IMAGE=${MAAS_CONTROLLER_IMAGE}"
 
-              ./test/e2e/scripts/prow_run_ai_gateway_controller_test.sh
+              mkdir -p "${ARTIFACT_DIR}"
+              ./test/e2e/scripts/prow_run_ai_gateway_controller_test.sh \
+                2>&1 | tee "${ARTIFACT_DIR}/prow.log"
 
               echo "success" > "$STATUS_FILE"
           - name: must-gather
