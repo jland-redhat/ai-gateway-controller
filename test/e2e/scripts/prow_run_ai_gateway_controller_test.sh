@@ -52,6 +52,10 @@ export AUTHORINO_NAMESPACE
 DEPLOYMENT_NAMESPACE="${DEPLOYMENT_NAMESPACE:-opendatahub}"
 MAAS_SUBSCRIPTION_NAMESPACE="${MAAS_SUBSCRIPTION_NAMESPACE:-models-as-a-service}"
 MODEL_NAMESPACE="${MODEL_NAMESPACE:-llm}"
+MODEL_NAME="${MODEL_NAME:-facebook-opt-125m-simulated}"
+export MODEL_NAME
+export E2E_MODEL_PATH="${E2E_MODEL_PATH:-/llm/${MODEL_NAME}}"
+export E2E_MODEL_REF="${E2E_MODEL_REF:-${MODEL_NAME}}"
 GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE:-openshift-ingress}"
 GATEWAY_NAME="${GATEWAY_NAME:-maas-default-gateway}"
 INGRESS_MODE="${INGRESS_MODE:-ocproute}"
@@ -157,7 +161,8 @@ setup_vars_for_tests() {
 validate_deployment() {
     echo "Deployment Validation"
     if [[ "$SKIP_VALIDATION" == "false" ]]; then
-        if ! "$PROJECT_ROOT/scripts/validate-deployment.sh"; then
+        if ! E2E_MODEL_PATH="$E2E_MODEL_PATH" E2E_MODEL_REF="$E2E_MODEL_REF" \
+            "$PROJECT_ROOT/scripts/validate-deployment.sh"; then
             echo "First validation failed; retrying after short wait..."
             wait_for_gateway_programmed "$GATEWAY_NAME" "$GATEWAY_NAMESPACE" 60 || true
             kubectl wait --for=condition=Available --timeout=60s \
@@ -166,7 +171,8 @@ validate_deployment() {
                 kubectl wait --for=condition=Available --timeout=60s \
                     "deployment/maas-api" -n "$MAAS_API_DEPLOYMENT_NAMESPACE" 2>/dev/null || true
             fi
-            if ! "$PROJECT_ROOT/scripts/validate-deployment.sh"; then
+            if ! E2E_MODEL_PATH="$E2E_MODEL_PATH" E2E_MODEL_REF="$E2E_MODEL_REF" \
+            "$PROJECT_ROOT/scripts/validate-deployment.sh"; then
                 echo "ERROR: Deployment validation failed after retry"
                 exit 1
             fi
@@ -189,7 +195,7 @@ run_e2e_tests() {
     export ENABLE_TENANT_NAMESPACE_DISCOVERY
     enable_tenant_namespace_discovery_for_e2e || exit 1
     export E2E_SKIP_TLS_VERIFY=true
-    export MODEL_NAME="facebook-opt-125m-simulated"
+    export MODEL_NAME
     export E2E_MODEL_NAMESPACE="$MODEL_NAMESPACE"
 
     local scheme="https"

@@ -93,6 +93,9 @@ if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
     echo "  MAAS_GATEWAY_HOST         Override gateway URL when cluster domain is not readable"
     echo "                            e.g. export MAAS_GATEWAY_HOST=https://maas.apps.your-cluster.example.com"
     echo "  INFRA_NAMESPACE           Namespace where MaaS API is deployed (default: AUTO)"
+    echo "  E2E_MODEL_PATH            Path prefix for inference (e.g. /llm/facebook-opt-125m-simulated)"
+    echo "                            Used when /v1/models returns a BBR gateway-root URL with no path"
+    echo "  E2E_MODEL_REF             MaaSModelRef name for path fallback when E2E_MODEL_PATH unset"
     echo "  OIDC_ISSUER_URL           When set, validates maas-api-auth-policy jwt.issuerUrl matches"
     echo "                            (external OIDC; avoids deploy vs test issuer drift / HTTP 401)"
     echo "  OIDC_CLIENT_ID            When set with OIDC_ISSUER_URL, checks oidc-client-bound client id"
@@ -662,6 +665,19 @@ else
                         MODEL_PATH=$(echo "$MODEL_CHAT" | sed 's|https\?://[^/]*||')
                         MODEL_CHAT="${HOST}${MODEL_PATH}"
                         print_info "Rewrote internal model URL to external gateway: $MODEL_CHAT"
+                    fi
+                    # BBR clusters return gateway root with no path segment. Path-based
+                    # HTTPRoutes live under /llm/<model-ref>; hitting /v1/... at gateway
+                    # root has no route and returns 404.
+                    if [[ -n "${E2E_MODEL_PATH:-}" ]]; then
+                        MODEL_CHAT="${HOST}${E2E_MODEL_PATH}"
+                        print_info "Using E2E_MODEL_PATH for inference route: $MODEL_CHAT"
+                    elif [[ "$MODEL_CHAT" == "${HOST}" || "$MODEL_CHAT" == "${HOST}/" ]]; then
+                        model_ref="${E2E_MODEL_REF:-${REQUESTED_MODEL:-}}"
+                        if [[ -n "$model_ref" ]]; then
+                            MODEL_CHAT="${HOST}/llm/${model_ref}"
+                            print_info "Gateway-root model URL; using path-based route: $MODEL_CHAT"
+                        fi
                     fi
                     # Use custom model path if provided, otherwise use endpoint
                     if [ -n "$CUSTOM_MODEL_PATH" ]; then
