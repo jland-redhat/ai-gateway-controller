@@ -43,7 +43,25 @@ _default_praxis_image() {
     grep -E '^praxis-extproc-image=' "${params}" | cut -d= -f2- || true
   fi
 }
+_derive_praxis_image_from_controller() {
+  # When CI passes AI_GATEWAY_CONTROLLER_IMAGE@digest with a companion tag (AIGC_TAG /
+  # image_tag in the Konflux snapshot), prefer the matching praxis PR tag over odh-stable.
+  local controller_image="${AI_GATEWAY_CONTROLLER_IMAGE:-}"
+  local explicit_tag="${AIGC_IMAGE_TAG:-${PRAXIS_EXTPROC_TAG:-}}"
+  if [[ -n "$explicit_tag" ]]; then
+    echo "quay.io/opendatahub/odh-praxis-extproc:${explicit_tag}"
+    return
+  fi
+  if [[ "$controller_image" == *@sha256:* ]]; then
+    local ref="${controller_image%%@*}"
+    local tag="${ref##*:}"
+    if [[ "$tag" != "$ref" && "$tag" != odh-stable ]]; then
+      echo "quay.io/opendatahub/odh-praxis-extproc:${tag}"
+    fi
+  fi
+}
 PRAXIS_EXTPROC_IMAGE="${PRAXIS_EXTPROC_IMAGE:-$(_default_praxis_image)}"
+PRAXIS_EXTPROC_IMAGE="${PRAXIS_EXTPROC_IMAGE:-$(_derive_praxis_image_from_controller)}"
 PRAXIS_EXTPROC_IMAGE="${PRAXIS_EXTPROC_IMAGE:-quay.io/opendatahub/odh-praxis-extproc:odh-stable}"
 
 # Default-tenant IPP object names in the gateway namespace (maas-controller + praxis share these).

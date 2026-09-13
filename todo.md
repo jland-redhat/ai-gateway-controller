@@ -14,8 +14,9 @@
 - [x] `integration-tests/ai-gateway-controller/pr-group-testing-pipeline.yaml`
 - [x] `gitops/integration-testing-prerequisites.yaml` — `ai-gateway-controller-group`
 
-- [ ] Open PR to `opendatahub-io/odh-konflux-central` and merge
+- [ ] Open PR to `opendatahub-io/odh-konflux-central` and merge (include `hack/tekton/pr-group-testing-pipeline.yaml`: no must-gather, PRAXIS tag from snapshot)
 - [ ] After merge: point `.tekton/ai-gateway-controller-group-test.yaml` at upstream konflux-central
+- [ ] Add `odh-praxis-extproc-ci` to group-components once Konflux builds praxis for PRs (until then pipeline uses `odh-praxis-extproc:${AIGC_TAG}`)
 
 ## Konflux cluster setup (manual)
 

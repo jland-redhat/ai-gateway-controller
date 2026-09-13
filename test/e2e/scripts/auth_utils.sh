@@ -278,7 +278,12 @@ collect_cluster_state() {
     kubectl get configs.maas.opendatahub.io -o wide 2>/dev/null || true
     kubectl get aitenants.maas.opendatahub.io -A -o wide 2>/dev/null || true
     kubectl get tenants.maas.opendatahub.io -A -o wide 2>/dev/null || true
-    kubectl get maasmodelrefs -n "$DEPLOYMENT_NAMESPACE" 2>/dev/null || true
+    kubectl get maasmodelrefs -A 2>/dev/null || true
+    echo ""
+    echo "--- LLM namespace ($LLM_NAMESPACE) ---"
+    kubectl get llminferenceservices -n "$LLM_NAMESPACE" -o wide 2>/dev/null || true
+    kubectl get httproutes -n "$LLM_NAMESPACE" -o wide 2>/dev/null || true
+    kubectl get maasmodelrefs -n "$LLM_NAMESPACE" -o wide 2>/dev/null || true
     kubectl get maasauthpolicies,maassubscriptions -n "$MAAS_SUBSCRIPTION_NAMESPACE" 2>/dev/null || true
     kubectl get maastenantconfigs -n "$MAAS_SUBSCRIPTION_NAMESPACE" 2>/dev/null || true
     kubectl get externalmodels.maas.opendatahub.io -A -o wide 2>/dev/null || true
@@ -291,13 +296,67 @@ collect_cluster_state() {
     kubectl get aigateways.components.platform.opendatahub.io -o wide 2>/dev/null || true
     kubectl get llmbatchgateways.batch.llm-d.ai -A -o wide 2>/dev/null || true
     echo ""
-    echo "--- HTTPRoutes ---"
-    kubectl get httproutes -A 2>/dev/null | head -30 || true
+    echo "--- HTTPRoutes (all) ---"
+    kubectl get httproutes -A 2>/dev/null || true
+    echo ""
+    echo "--- HTTPRoutes ($LLM_NAMESPACE) ---"
+    kubectl get httproutes -n "$LLM_NAMESPACE" -o wide 2>/dev/null || true
+    echo ""
+    echo "--- LLMInferenceServices ($LLM_NAMESPACE) ---"
+    kubectl get llminferenceservices -n "$LLM_NAMESPACE" -o wide 2>/dev/null || true
+    echo ""
+    echo "--- ext_proc deployments ($GATEWAY_NAMESPACE) ---"
+    kubectl get deploy payload-processing payload-pre-processing -n "$GATEWAY_NAMESPACE" \
+      -o custom-columns='NAME:.metadata.name,IMAGE:.spec.template.spec.containers[0].image,ARGS:.spec.template.spec.containers[0].args' 2>/dev/null || true
     echo ""
     echo "--- Gateway ---"
     kubectl get gateway -A 2>/dev/null || true
   } > "$outdir/cluster-state.log" 2>&1
   echo "  Saved to $outdir/cluster-state.log"
+}
+
+# -----------------------------------------------------------------------------
+# Collect LLM routing objects (full YAML) for post-mortem debugging
+# -----------------------------------------------------------------------------
+collect_llm_routing_artifacts() {
+  local outdir="${1:-$ARTIFACTS_DIR/llm-routing}"
+  mkdir -p "$outdir"
+  echo "Collecting LLM routing artifacts to $outdir"
+
+  local saved=0
+  _save_yaml() {
+    local file="$1"
+    shift
+    if eval "$*" > "$file" 2>/dev/null && [[ -s "$file" ]]; then
+      saved=$((saved + 1))
+    else
+      rm -f "$file"
+    fi
+  }
+
+  if kubectl get namespace "$LLM_NAMESPACE" &>/dev/null; then
+    _save_yaml "$outdir/httproutes.yaml" \
+      "kubectl get httproutes -n $LLM_NAMESPACE -o yaml"
+    _save_yaml "$outdir/llminferenceservices.yaml" \
+      "kubectl get llminferenceservices -n $LLM_NAMESPACE -o yaml"
+    _save_yaml "$outdir/maasmodelrefs.yaml" \
+      "kubectl get maasmodelrefs -n $LLM_NAMESPACE -o yaml"
+    _save_yaml "$outdir/services.yaml" \
+      "kubectl get svc -n $LLM_NAMESPACE -o yaml"
+  else
+    echo "  Skipping $LLM_NAMESPACE (namespace not found)"
+  fi
+
+  _save_yaml "$outdir/gateway-httproutes.yaml" \
+    "kubectl get httproutes -n $GATEWAY_NAMESPACE -o yaml"
+  _save_yaml "$outdir/envoyfilter-payload-processing.yaml" \
+    "kubectl get envoyfilter payload-processing -n $GATEWAY_NAMESPACE -o yaml"
+  _save_yaml "$outdir/ext-proc-deployments.yaml" \
+    "kubectl get deploy payload-processing payload-pre-processing -n $GATEWAY_NAMESPACE -o yaml"
+  _save_yaml "$outdir/payload-processing-plugins-configmap.yaml" \
+    "kubectl get configmap payload-processing-plugins -n $GATEWAY_NAMESPACE -o yaml"
+
+  echo "  Saved $saved artifact file(s) to $outdir"
 }
 
 # -----------------------------------------------------------------------------
@@ -327,6 +386,7 @@ collect_e2e_artifacts() {
   collect_authorino_logs_redacted "$ARTIFACTS_DIR/authorino-debug.log"
   collect_cluster_state "$ARTIFACTS_DIR"
   collect_maas_crs "$ARTIFACTS_DIR/maas-crs"
+  collect_llm_routing_artifacts "$ARTIFACTS_DIR/llm-routing"
   local ns
   for ns in \
     "$DEPLOYMENT_NAMESPACE" \
