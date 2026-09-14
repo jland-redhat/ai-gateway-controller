@@ -1,7 +1,7 @@
 [files]
 # Vendored from praxis-extproc (hack/scripts/get-manifests.sh). Includes an
 # intentional Istio <=1.25 filter name misspelling (extenstions).
-# Synced from models-as-a-service for kustomize e2e deploy (sync-maas-e2e-tests.sh).
+# Fetched from models-as-a-service at runtime (test/maas-e2e/ checkout).
 # Uses Envoy/Istio terms (INSERT_BEFORE, otel_als_cluster / ALS) that typos flags.
 extend-exclude = ["config/manifests/**", "deployment/**"]
 

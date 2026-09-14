@@ -19,16 +19,17 @@ _find_project_root_bootstrap() {
 PROJECT_ROOT="$(_find_project_root_bootstrap)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-if [[ ! -f "${PROJECT_ROOT}/scripts/deployment-helpers.sh" ]]; then
-  echo "ERROR: MaaS deploy scripts missing. Run: ./hack/scripts/sync-maas-e2e-tests.sh" >&2
-  exit 1
-fi
+# Fetch models-as-a-service (tests, deploy.sh, deployment/) — see test/maas-e2e.lock
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/fetch-maas-e2e.sh"
 
 POD_TIMEOUT=${POD_TIMEOUT:-600}
 export POD_TIMEOUT
 
-source "$PROJECT_ROOT/scripts/deployment-helpers.sh"
-source "$PROJECT_ROOT/test/e2e/scripts/auth_utils.sh"
+source "${MAAS_CHECKOUT_ROOT}/scripts/deployment-helpers.sh"
+source "${MAAS_E2E_DIR}/scripts/auth_utils.sh"
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/aigc-artifacts.sh"
 # shellcheck disable=SC1091
 source "$PROJECT_ROOT/test/e2e/scripts/maas-image-defaults.sh"
 
@@ -165,7 +166,7 @@ validate_deployment() {
     echo "Deployment Validation"
     if [[ "$SKIP_VALIDATION" == "false" ]]; then
         if ! E2E_MODEL_PATH="$E2E_MODEL_PATH" E2E_MODEL_REF="$E2E_MODEL_REF" \
-            "$PROJECT_ROOT/scripts/validate-deployment.sh"; then
+            "${MAAS_CHECKOUT_ROOT}/scripts/validate-deployment.sh"; then
             echo "First validation failed; retrying after short wait..."
             wait_for_gateway_programmed "$GATEWAY_NAME" "$GATEWAY_NAMESPACE" 60 || true
             kubectl wait --for=condition=Available --timeout=60s \
@@ -175,7 +176,7 @@ validate_deployment() {
                     "deployment/maas-api" -n "$MAAS_API_DEPLOYMENT_NAMESPACE" 2>/dev/null || true
             fi
             if ! E2E_MODEL_PATH="$E2E_MODEL_PATH" E2E_MODEL_REF="$E2E_MODEL_REF" \
-            "$PROJECT_ROOT/scripts/validate-deployment.sh"; then
+            "${MAAS_CHECKOUT_ROOT}/scripts/validate-deployment.sh"; then
                 echo "ERROR: Deployment validation failed after retry"
                 exit 1
             fi
@@ -248,7 +249,7 @@ _run_exit_artifacts() {
     set +e
     DEPLOYMENT_NAMESPACE="$DEPLOYMENT_NAMESPACE" MAAS_SUBSCRIPTION_NAMESPACE="$MAAS_SUBSCRIPTION_NAMESPACE" \
       AUTHORINO_NAMESPACE="$AUTHORINO_NAMESPACE" ARTIFACTS_DIR="$ARTIFACTS_DIR" \
-        collect_e2e_artifacts
+        collect_aigc_e2e_artifacts
     mkdir -p "$ARTIFACTS_DIR"
     DEPLOYMENT_NAMESPACE="$DEPLOYMENT_NAMESPACE" MAAS_SUBSCRIPTION_NAMESPACE="$MAAS_SUBSCRIPTION_NAMESPACE" \
       AUTHORINO_NAMESPACE="$AUTHORINO_NAMESPACE" \
@@ -271,7 +272,7 @@ else
     print_header "Deploying Models"
     phase_mark deploy_models start
     # shellcheck disable=SC1091
-    source "${SCRIPT_DIR}/deploy-models.sh"
+    source "${MAAS_E2E_DIR}/scripts/deploy-models.sh"
     phase_mark deploy_models end
     patch_authorino_debug
 
@@ -287,7 +288,7 @@ setup_vars_for_tests
 
 print_header "Setting up test tokens"
 # shellcheck disable=SC1091
-source "${SCRIPT_DIR}/setup-test-tokens.sh"
+source "${MAAS_E2E_DIR}/scripts/setup-test-tokens.sh"
 
 print_header "Validating Deployment"
 phase_mark validate start

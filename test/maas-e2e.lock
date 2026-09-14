@@ -1,0 +1,6 @@
+# Pin for ai-gateway-controller e2e (models-as-a-service).
+# Refresh: MAAS_UPDATE_LOCK=true ./test/e2e/scripts/fetch-maas-e2e.sh
+maas_repo=https://github.com/opendatahub-io/models-as-a-service
+maas_commit=53fdb8a1e0fc97453b863bae3933621ce6b804a1
+maas_ref=main
+updated_at=2026-09-14T00:00:00Z

@@ -23,6 +23,7 @@ coverage.html
 test/e2e/reports/**
 !test/e2e/reports/.gitkeep
 !test/e2e/reports/.gitignore
+test/maas-e2e/
 test/e2e/**/__pycache__/
 test/e2e/.pytest_cache/
 test/e2e/.venv/

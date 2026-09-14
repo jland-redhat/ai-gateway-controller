@@ -13,8 +13,12 @@ if [[ -z "${PROJECT_ROOT:-}" ]]; then
     _dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     PROJECT_ROOT="$(cd "$_dir/../../.." && pwd)"
 fi
-[[ "$(type -t find_project_root 2>/dev/null)" == "function" ]] || source "$PROJECT_ROOT/scripts/deployment-helpers.sh"
-[[ "$(type -t apply_default_oidc_for_keycloak 2>/dev/null)" == "function" ]] || source "$PROJECT_ROOT/test/e2e/scripts/auth_utils.sh"
+if [[ -z "${MAAS_CHECKOUT_ROOT:-}" ]]; then
+    # shellcheck disable=SC1091
+    source "${PROJECT_ROOT}/test/e2e/scripts/fetch-maas-e2e.sh"
+fi
+[[ "$(type -t find_project_root 2>/dev/null)" == "function" ]] || source "${MAAS_CHECKOUT_ROOT}/scripts/deployment-helpers.sh"
+[[ "$(type -t apply_default_oidc_for_keycloak 2>/dev/null)" == "function" ]] || source "${MAAS_E2E_DIR}/scripts/auth_utils.sh"
 
 # Env defaults (no-op if already set by orchestrator)
 DEPLOY_MODE="${DEPLOY_MODE:-kustomize}"
@@ -37,14 +41,14 @@ deploy_maas_platform() {
     echo "Deployment mode: ${DEPLOY_MODE}"
 
     echo "Installing cert-manager and LeaderWorkerSet operators..."
-    if ! bash "$PROJECT_ROOT/.github/hack/install-cert-manager-and-lws.sh"; then
+    if ! bash "${MAAS_CHECKOUT_ROOT}/.github/hack/install-cert-manager-and-lws.sh"; then
         echo "❌ ERROR: cert-manager/LWS installation failed"
         exit 1
     fi
 
     if [[ "${DEPLOY_MODE}" == "kustomize" ]]; then
         echo "Installing OpenDataHub operator..."
-        if ! bash "$PROJECT_ROOT/.github/hack/install-odh.sh"; then
+        if ! bash "${MAAS_CHECKOUT_ROOT}/.github/hack/install-odh.sh"; then
             echo "❌ ERROR: ODH installation failed"
             exit 1
         fi
@@ -64,7 +68,7 @@ deploy_maas_platform() {
     echo "Using policy engine: ${POLICY_ENGINE} (Authorino namespace: ${AUTHORINO_NAMESPACE})"
     export MODEL_NAMESPACE
     local deploy_cmd=(
-        "$PROJECT_ROOT/scripts/deploy.sh"
+        "${MAAS_CHECKOUT_ROOT}/scripts/deploy.sh"
         --deployment-mode "${DEPLOY_MODE}"
         --policy-engine "${POLICY_ENGINE}"
     )
@@ -80,7 +84,7 @@ deploy_maas_platform() {
 
     if [[ "${EXTERNAL_OIDC}" == "true" ]]; then
         echo "Applying Keycloak test realms (tenant-a / tenant-b) for OIDC token tests..."
-        if ! bash "$PROJECT_ROOT/docs/samples/install/keycloak/test-realms/apply-test-realms.sh"; then
+        if ! bash "${MAAS_CHECKOUT_ROOT}/docs/samples/install/keycloak/test-realms/apply-test-realms.sh"; then
             echo "❌ ERROR: Keycloak test realm import failed (see docs/samples/install/keycloak/test-realms/)"
             exit 1
         fi

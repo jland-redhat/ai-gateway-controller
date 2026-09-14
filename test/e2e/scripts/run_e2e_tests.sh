@@ -1,13 +1,16 @@
 #!/bin/bash
-# ai-gateway-controller e2e runner — MaaS pytest suite without external-model tests.
-# TODO(before-merge): uncomment test_external_models.py once ai-gateway-controller external-model
-# reconciler is implemented and Konflux can run egress fixtures (see test/e2e/tests/test_external_models.py).
+# ai-gateway-controller e2e runner — MaaS pytest suite (dynamic checkout).
+# Excluded modules: see test/e2e/TODO.md
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-TEST_DIR="$PROJECT_ROOT/test/e2e"
+if [[ -z "${MAAS_E2E_DIR:-}" ]]; then
+  # shellcheck disable=SC1091
+  source "${SCRIPT_DIR}/fetch-maas-e2e.sh"
+fi
+TEST_DIR="${MAAS_E2E_DIR}"
 
 serial_only=false
 extra_pytest_args=()
@@ -26,7 +29,7 @@ if ! [[ "$E2E_PARALLEL_WORKERS" =~ ^[1-9][0-9]*$ ]]; then
     exit 1
 fi
 
-ARTIFACTS_DIR="${ARTIFACTS_DIR:-${ARTIFACT_DIR:-${ARTIFACTS:-${LOG_DIR:-$TEST_DIR/reports}}}}"
+ARTIFACTS_DIR="${ARTIFACTS_DIR:-${ARTIFACT_DIR:-${ARTIFACTS:-${LOG_DIR:-$PROJECT_ROOT/test/e2e/reports}}}}"
 mkdir -p "$ARTIFACTS_DIR"
 
 if [[ "$E2E_PARALLEL_WORKERS" -gt 1 ]]; then
@@ -36,12 +39,13 @@ if [[ "$E2E_PARALLEL_WORKERS" -gt 1 ]]; then
     export E2E_MULTITENANCY_PHASE_TIMEOUT="${E2E_MULTITENANCY_PHASE_TIMEOUT:-180}"
 fi
 
-if [[ ! -d "$TEST_DIR/.venv" ]]; then
+VENV_DIR="${PROJECT_ROOT}/test/e2e/.venv"
+if [[ ! -d "$VENV_DIR" ]]; then
     echo "Creating Python venv for e2e tests..."
-    python3 -m venv "$TEST_DIR/.venv" --upgrade-deps
+    python3 -m venv "$VENV_DIR" --upgrade-deps
 fi
 # shellcheck disable=SC1091
-source "$TEST_DIR/.venv/bin/activate"
+source "$VENV_DIR/bin/activate"
 python -m pip install --upgrade pip --quiet
 python -m pip install -r "$TEST_DIR/requirements.txt" --quiet
 
