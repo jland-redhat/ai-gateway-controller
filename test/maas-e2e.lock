@@ -1,6 +1,14 @@
-# Pin for ai-gateway-controller e2e (models-as-a-service).
-# Refresh: MAAS_UPDATE_LOCK=true ./test/e2e/scripts/fetch-maas-e2e.sh
+# Pinned models-as-a-service commit for ai-gateway-controller e2e.
+#
+# Policy: CI and local prow runs fetch THIS commit (not rolling main).
+# Initial pin: tip of opendatahub-io/models-as-a-service main as of 2026-09-14
+#   53fdb8a1 — docs: maas flow control design RHAISTRAT-2701 (#1453)
+#
+# Bump pin deliberately after validating e2e on the new MaaS revision:
+#   MAAS_UPDATE_LOCK=true bash test/e2e/scripts/fetch-maas-e2e.sh
+# Override for one-off runs without editing this file:
+#   MAAS_COMMIT=<sha> ./test/e2e/scripts/prow_run_ai_gateway_controller_test.sh
 maas_repo=https://github.com/opendatahub-io/models-as-a-service
 maas_commit=53fdb8a1e0fc97453b863bae3933621ce6b804a1
 maas_ref=main
-updated_at=2026-09-14T00:00:00Z
+updated_at=2026-09-14T21:15:00Z

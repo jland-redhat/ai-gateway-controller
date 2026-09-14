@@ -6,6 +6,9 @@
 #   MAAS_COMMIT=<sha> source test/e2e/scripts/fetch-maas-e2e.sh
 #   MAAS_UPDATE_LOCK=true bash test/e2e/scripts/fetch-maas-e2e.sh
 #
+# Pin: default fetch ref is maas_commit from test/maas-e2e.lock (not rolling main).
+# Set MAAS_COMMIT to override for a single run without editing the lock file.
+#
 # Container runtime: Podman (Docker compatible) — not required; uses git fetch only.
 
 set -euo pipefail

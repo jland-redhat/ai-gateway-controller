@@ -1,9 +1,11 @@
 # ai-gateway-controller E2E — dynamic MaaS checkout
 
-Tests and deploy tooling come from [models-as-a-service](https://github.com/opendatahub-io/models-as-a-service) at runtime (`test/e2e/scripts/fetch-maas-e2e.sh`), pinned by `test/maas-e2e.lock`.
+Tests and deploy tooling come from [models-as-a-service](https://github.com/opendatahub-io/models-as-a-service) at runtime (`test/e2e/scripts/fetch-maas-e2e.sh`).
+
+**Pin policy:** `test/maas-e2e.lock` holds a fixed commit SHA (currently `53fdb8a1` — MaaS `main` tip as of 2026-09-14). Prow/CI always fetch that SHA; they do **not** track rolling `main`. Bump the lock only after e2e passes on a newer MaaS revision.
 
 ```bash
-# Refresh pin to latest main:
+# Bump pin to latest main (updates test/maas-e2e.lock after fetch):
 MAAS_UPDATE_LOCK=true bash test/e2e/scripts/fetch-maas-e2e.sh
 
 AI_GATEWAY_CONTROLLER_IMAGE=quay.io/opendatahub/odh-ai-gateway-controller:odh-pr \
@@ -26,6 +28,19 @@ Re-enable when the **Requirement to re-introduce** is met. Update the allowlist 
 | `test_tenant_auto_resolve.py` | Tenant auto-resolve depends on MaaS controller features not validated on aigc yet | Confirm `maas-controller` + aigc AITenant wiring; run on dedicated cluster |
 | `test_crd_watch_resilience.py` | Deletes KServe CRD / restarts controller — destructive serial test | Safe on ephemeral CI only; add serial pass gating + KServe module present |
 | `test_authpolicy_generation_stability.py` | Long stability window; sensitive to parallel AuthPolicy churn | Run serial-only or increase isolation; confirm no aigc-specific AuthPolicy regressions |
+
+---
+
+## Post-fetch test patches vs upstream MaaS PRs
+
+Some e2e fixes from the vendored branch (`ci/maas-e2e-konflux-group-test`) are **not** in MaaS `main` at the pinned commit. Two ways to close that gap:
+
+| Approach | When to use | Trade-off |
+|----------|-------------|-----------|
+| **Upstream MaaS PR** (preferred) | Fix belongs in shared MaaS tests (praxis log skip, `_poll_status` flakes, duplicate-header warmup) | All MaaS consumers benefit; slower until merged |
+| **aigc post-fetch patch** (`patch-maas-tests-for-aigc.sh`, not added yet) | Short-term CI unblock while upstream PR is open | Duplicated logic; must re-apply after every lock bump |
+
+**Current choice:** upstream-first — no test patch script yet. Deploy patches stay in `patch-maas-deploy-for-aigc.sh`. If `/group-test` flakes on the pinned MaaS commit, either open MaaS PRs for the rows below or add a minimal post-fetch patch script here.
 
 ---
 
