@@ -2,7 +2,7 @@
 
 ## TEMP — revert before merge (praxis-proxy/ai#699 CI pin)
 
-E2E/prow/Tekton default `PRAXIS_EXTPROC_IMAGE` to `quay.io/opendatahub/odh-praxis-extproc:pr699-76cb977`
+E2E/prow/Tekton default `PRAXIS_EXTPROC_IMAGE` to `quay.io/maas/odh-praxis-extproc:pr699-76cb977`
 (praxis-proxy/ai#699 `llmisvc_model_provider_resolver` @ `76cb977ad65235a9d965efc014c87bcad00e4960`).
 **Undo before merging this PR:**
 
@@ -13,11 +13,8 @@ E2E/prow/Tekton default `PRAXIS_EXTPROC_IMAGE` to `quay.io/opendatahub/odh-praxi
 
 Publish the PR699 praxis image to Quay (if not already present) before `/group-test`:
 
-```bash
-# Build from opendatahub-io/praxis-extproc with praxis-ai rev 76cb977 (see session notes / local /tmp build)
-podman tag odh-praxis-extproc:pr699-76cb977 quay.io/opendatahub/odh-praxis-extproc:pr699-76cb977
-podman push quay.io/opendatahub/odh-praxis-extproc:pr699-76cb977
-```
+Published at `quay.io/maas/odh-praxis-extproc:pr699-76cb977` (maas org on [Quay](https://quay.io/organization/maas)).
+Before merge to opendatahub: either promote to `quay.io/opendatahub/odh-praxis-extproc` or keep maas org pin until Konflux builds praxis with #699.
 
 ## Done in this repo
 
@@ -50,7 +47,7 @@ podman push quay.io/opendatahub/odh-praxis-extproc:pr699-76cb977
 | `maas-api` | `quay.io/opendatahub/maas-api:latest` (MaaS `main` push) |
 | `maas-controller` | `quay.io/opendatahub/maas-controller:latest` (MaaS `main` push) |
 | `ai-gateway-controller` | PR snapshot digest from `odh-ai-gateway-controller-ci` |
-| `praxis-extproc` | **TEMP:** `quay.io/opendatahub/odh-praxis-extproc:pr699-76cb977` (praxis-proxy/ai#699); revert to `odh-praxis-extproc-ci` / `odh-stable` before merge |
+| `praxis-extproc` | **TEMP:** `quay.io/maas/odh-praxis-extproc:pr699-76cb977` (praxis-proxy/ai#699); revert to `odh-praxis-extproc-ci` / `odh-stable` before merge |
 
 Override MaaS tags with `MAAS_IMAGE_TAG` or explicit `MAAS_*_IMAGE` env vars.
 

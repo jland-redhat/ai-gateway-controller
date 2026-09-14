@@ -24,7 +24,7 @@ fi
 # Until then, CI/prow default to a manually published tag built from opendatahub-io/praxis-extproc + that rev.
 PRAXIS_AI_PR699_REV="${PRAXIS_AI_PR699_REV:-76cb977ad65235a9d965efc014c87bcad00e4960}"
 PRAXIS_EXTPROC_PR699_TAG="${PRAXIS_EXTPROC_PR699_TAG:-pr699-76cb977}"
-PRAXIS_EXTPROC_PR699_IMAGE="${PRAXIS_EXTPROC_PR699_IMAGE:-quay.io/opendatahub/odh-praxis-extproc:${PRAXIS_EXTPROC_PR699_TAG}}"
+PRAXIS_EXTPROC_PR699_IMAGE="${PRAXIS_EXTPROC_PR699_IMAGE:-quay.io/maas/odh-praxis-extproc:${PRAXIS_EXTPROC_PR699_TAG}}"
 export PRAXIS_EXTPROC_IMAGE="${PRAXIS_EXTPROC_IMAGE:-${PRAXIS_EXTPROC_PR699_IMAGE}}"
 
 echo "MaaS platform images:"

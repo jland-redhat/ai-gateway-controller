@@ -9,7 +9,7 @@ spec:
     odh-ai-gateway-controller-ci image.
 
     TEMP (remove before merge): defaults PRAXIS_EXTPROC_IMAGE to
-    quay.io/opendatahub/odh-praxis-extproc:pr699-76cb977 (praxis-proxy/ai#699
+    quay.io/maas/odh-praxis-extproc:pr699-76cb977 (praxis-proxy/ai#699
     llmisvc_model_provider_resolver @ 76cb977). Revert to odh-praxis-extproc-ci from
     the group snapshot or odh-stable once that filter is on a published tag.
   params:
@@ -259,7 +259,7 @@ spec:
 
               # TODO(before-merge): drop PR699 override; use odh-praxis-extproc-ci snapshot or
               # odh-stable once llmisvc_model_provider_resolver is on a published odh-praxis-extproc tag.
-              PRAXIS_EXTPROC_PR699_IMAGE="quay.io/opendatahub/odh-praxis-extproc:pr699-76cb977"
+              PRAXIS_EXTPROC_PR699_IMAGE="quay.io/maas/odh-praxis-extproc:pr699-76cb977"
               PRAXIS_FROM_SNAPSHOT=$(jq -r '."odh-praxis-extproc-ci".image // empty' <<< "${SNAPSHOT}")
               if [ -n "${PRAXIS_FROM_SNAPSHOT}" ] && [ "${PRAXIS_FROM_SNAPSHOT}" != "null" ]; then
                 export PRAXIS_EXTPROC_IMAGE="${PRAXIS_FROM_SNAPSHOT}"

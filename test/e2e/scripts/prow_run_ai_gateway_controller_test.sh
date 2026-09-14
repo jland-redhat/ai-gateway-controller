@@ -1,7 +1,7 @@
 #!/bin/bash
 # ai-gateway-controller Konflux / Prow e2e orchestrator.
 #
-# TEMP (remove before merge): defaults PRAXIS_EXTPROC_IMAGE to quay.io/opendatahub/odh-praxis-extproc:pr699-76cb977,
+# TEMP (remove before merge): defaults PRAXIS_EXTPROC_IMAGE to quay.io/maas/odh-praxis-extproc:pr699-76cb977,
 # built with praxis-proxy/ai#699 (llmisvc_model_provider_resolver @ 76cb977). Revert to odh-stable / Konflux
 # odh-praxis-extproc-ci snapshot once that filter is on a published odh-praxis-extproc tag.
 #
