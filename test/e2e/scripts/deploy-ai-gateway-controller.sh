@@ -268,6 +268,9 @@ echo "  gateway: ${GATEWAY_NAMESPACE}/${GATEWAY_NAME}"
 echo "  remove maas IPP: ${REMOVE_MAAS_IPP}"
 
 if [[ "${REMOVE_MAAS_IPP}" == "true" ]]; then
+  # AITenant mutations go through maas-controller's validating webhook; annotate before
+  # scaling it to 0 for the IPP handoff.
+  _enable_praxis_on_default_aitenant
   _pause_maas_controller
   _delete_legacy_ipp_in_gateway_namespace
 fi
@@ -275,7 +278,6 @@ fi
 _apply_ai_gateway_controller
 
 if [[ "${REMOVE_MAAS_IPP}" == "true" ]]; then
-  _enable_praxis_on_default_aitenant
   _wait_for_praxis_extproc
   _protect_praxis_from_maas_reconcile
   _resume_maas_controller
