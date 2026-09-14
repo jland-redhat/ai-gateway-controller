@@ -376,6 +376,26 @@ collect_namespace_pod_logs() {
 }
 
 # -----------------------------------------------------------------------------
+# OpenShift must-gather (stored under ARTIFACTS_DIR, not streamed to stdout)
+# -----------------------------------------------------------------------------
+collect_must_gather() {
+  local dest="${1:-$ARTIFACTS_DIR/gather-openshift}"
+  local logfile="${2:-$ARTIFACTS_DIR/must-gather.log}"
+  mkdir -p "$(dirname "$logfile")" "$dest"
+  if ! command -v oc >/dev/null 2>&1; then
+    echo "  Skipping must-gather (oc not found)" >>"$logfile"
+    return 0
+  fi
+  echo "Collecting OpenShift must-gather to $dest (log: $logfile) ..."
+  {
+    echo "=== must-gather started at $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
+    oc adm must-gather --dest-dir "$dest"
+    echo "=== must-gather finished at $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
+  } >>"$logfile" 2>&1 || true
+  echo "  must-gather complete (see $logfile)"
+}
+
+# -----------------------------------------------------------------------------
 # Main artifact collection: Authorino logs, cluster state, namespace pod logs
 # -----------------------------------------------------------------------------
 collect_e2e_artifacts() {
@@ -405,6 +425,9 @@ collect_e2e_artifacts() {
       echo "  Skipping namespace $ns (not found)"
     fi
   done
+  if [[ "${E2E_COLLECT_MUST_GATHER:-false}" == "true" ]]; then
+    collect_must_gather "$ARTIFACTS_DIR/gather-openshift" "$ARTIFACTS_DIR/must-gather.log"
+  fi
   echo "=============================================="
 }
 

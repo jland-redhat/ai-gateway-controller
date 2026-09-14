@@ -279,6 +279,29 @@ spec:
                 2>&1 | tee "${ARTIFACT_DIR}/prow.log"
 
               echo "success" > "$STATUS_FILE"
+          - name: must-gather
+            onError: continue
+            image: quay.io/rhoai/rhoai-task-toolset:maas
+            env:
+              - name: KUBECONFIG
+                value: "/credentials/$(steps.get-kubeconfig.results.kubeconfig)"
+              - name: ARTIFACT_DIR
+                value: /workspace/artifacts-dir
+            workingDir: /workspace/source
+            volumeMounts:
+              - name: credentials
+                mountPath: /credentials
+            script: |
+              set -euo pipefail
+              mkdir -p "${ARTIFACT_DIR}/gather-openshift"
+              LOG="${ARTIFACT_DIR}/must-gather.log"
+              echo "Collecting must-gather (details in ${LOG}) ..."
+              {
+                echo "=== must-gather started at $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
+                oc adm must-gather --dest-dir "${ARTIFACT_DIR}/gather-openshift"
+                echo "=== must-gather finished at $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
+              } >>"${LOG}" 2>&1
+              echo "must-gather complete"
           - name: git-push-artifacts
             onError: continue
             ref:
