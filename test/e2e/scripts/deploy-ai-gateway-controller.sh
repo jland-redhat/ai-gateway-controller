@@ -118,6 +118,18 @@ _resume_maas_controller() {
   oc scale deployment "${MAAS_CONTROLLER_DEPLOYMENT}" -n "${DEPLOYMENT_NAMESPACE}" \
     --replicas="${MAAS_CONTROLLER_PRIOR_REPLICAS}"
   oc rollout status deployment/"${MAAS_CONTROLLER_DEPLOYMENT}" -n "${DEPLOYMENT_NAMESPACE}" --timeout=180s || true
+  MAAS_CONTROLLER_PAUSED=false
+}
+
+# ai-gateway-controller patches AITenant (finalizer) through maas-controller's
+# validating webhook. Bring maas-controller back after the legacy IPP delete;
+# with payload-processing-type=praxis, maas-controller does not recreate IPP.
+_resume_maas_controller_for_aitenant_webhook() {
+  if [[ "${MAAS_CONTROLLER_PAUSED:-}" != "true" ]]; then
+    return 0
+  fi
+  echo "Resuming maas-controller so ai-gateway-controller can reconcile AITenant (webhook) ..."
+  _resume_maas_controller
 }
 
 _delete_legacy_ipp_in_gateway_namespace() {
@@ -181,6 +193,39 @@ _apply_ai_gateway_controller() {
     -n "${AI_GATEWAY_CONTROLLER_NAMESPACE}" --timeout=180s
 }
 
+_wait_for_aigc_praxis_reconcile() {
+  echo "Waiting for ai-gateway-controller to attach praxis finalizer on ${AITENANT_NAMESPACE}/${AITENANT_NAME} ..."
+  local deadline=$((SECONDS + 120))
+  while [[ $SECONDS -lt $deadline ]]; do
+    if oc get aitenant "${AITENANT_NAME}" -n "${AITENANT_NAMESPACE}" \
+      -o jsonpath='{.metadata.finalizers}' 2>/dev/null | grep -q 'ai-gateway-controller.opendatahub.io/praxis-cleanup'; then
+      echo "ai-gateway-controller praxis reconcile started (finalizer present)"
+      return 0
+    fi
+    sleep 3
+  done
+  echo "WARN: praxis finalizer not observed on AITenant within 120s; continuing praxis wait anyway" >&2
+}
+
+_remove_stale_payload_processing_before_wait() {
+  if ! oc get deployment payload-processing -n "${GATEWAY_NAMESPACE}" &>/dev/null; then
+    return 0
+  fi
+  local image args
+  image="$(oc get deployment payload-processing -n "${GATEWAY_NAMESPACE}" \
+    -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)"
+  args="$(oc get deployment payload-processing -n "${GATEWAY_NAMESPACE}" \
+    -o jsonpath='{.spec.template.spec.containers[0].args}' 2>/dev/null || true)"
+  if [[ "${image}" == "${PRAXIS_EXTPROC_IMAGE}" ]] \
+    && [[ "${args}" == *"/etc/praxis/extproc.yaml"* ]]; then
+    return 0
+  fi
+  echo "Removing stale payload-processing (image=${image:-<none>}) before praxis install ..."
+  _delete_legacy_ipp_in_gateway_namespace
+  oc annotate aitenant "${AITENANT_NAME}" -n "${AITENANT_NAMESPACE}" \
+    "reconcile-trigger=$(date +%s)" --overwrite 2>/dev/null || true
+}
+
 _wait_for_praxis_extproc() {
   echo "Waiting for praxis-extproc (${PRAXIS_EXTPROC_IMAGE}) in ${GATEWAY_NAMESPACE} (timeout: ${PRAXIS_INSTALL_TIMEOUT}s) ..."
   local deadline=$((SECONDS + PRAXIS_INSTALL_TIMEOUT))
@@ -204,19 +249,18 @@ _wait_for_praxis_extproc() {
       echo "✅ praxis-extproc ready: ${GATEWAY_NAMESPACE}/payload-processing image=${image}"
       return 0
     fi
-    # Manager may still be applying; also accept any odh-praxis-extproc tag once rolled out.
-    if [[ "${image}" == *"odh-praxis-extproc"* ]] \
-      && [[ "${args}" == *"/etc/praxis/extproc.yaml"* ]] \
-      && [[ "${ready:-0}" -ge 1 ]]; then
-      echo "✅ praxis-extproc ready: ${GATEWAY_NAMESPACE}/payload-processing image=${image}"
-      return 0
-    fi
     echo "  Waiting... image=${image:-<none>} ready=${ready:-0} args=${args:-<none>}"
     sleep 5
   done
 
   echo "ERROR: praxis-extproc not ready after ${PRAXIS_INSTALL_TIMEOUT}s" >&2
   oc get deployment -n "${GATEWAY_NAMESPACE}" | grep payload || true
+  oc get pods -n "${GATEWAY_NAMESPACE}" | grep payload || true
+  local pod
+  pod="$(oc get pods -n "${GATEWAY_NAMESPACE}" -o name 2>/dev/null | grep payload-processing | head -1 || true)"
+  if [[ -n "${pod}" ]]; then
+    oc describe "${pod}" -n "${GATEWAY_NAMESPACE}" 2>&1 | tail -20 || true
+  fi
   oc logs deployment/ai-gateway-controller -n "${AI_GATEWAY_CONTROLLER_NAMESPACE}" --tail=30 2>&1 || true
   return 1
 }
@@ -268,19 +312,20 @@ echo "  gateway: ${GATEWAY_NAMESPACE}/${GATEWAY_NAME}"
 echo "  remove maas IPP: ${REMOVE_MAAS_IPP}"
 
 if [[ "${REMOVE_MAAS_IPP}" == "true" ]]; then
-  # AITenant mutations go through maas-controller's validating webhook; annotate before
-  # scaling it to 0 for the IPP handoff.
+  # Annotate while webhook is up, pause only long enough to delete legacy IPP.
   _enable_praxis_on_default_aitenant
   _pause_maas_controller
   _delete_legacy_ipp_in_gateway_namespace
+  _resume_maas_controller_for_aitenant_webhook
 fi
 
 _apply_ai_gateway_controller
 
 if [[ "${REMOVE_MAAS_IPP}" == "true" ]]; then
+  _wait_for_aigc_praxis_reconcile
+  _remove_stale_payload_processing_before_wait
   _wait_for_praxis_extproc
   _protect_praxis_from_maas_reconcile
-  _resume_maas_controller
 fi
 
 assert_praxis_extproc_image
