@@ -1,5 +1,24 @@
 # ai-gateway-controller E2E / Konflux — TODO
 
+## TEMP — revert before merge (praxis-proxy/ai#699 CI pin)
+
+E2E/prow/Tekton default `PRAXIS_EXTPROC_IMAGE` to `quay.io/opendatahub/odh-praxis-extproc:pr699-76cb977`
+(praxis-proxy/ai#699 `llmisvc_model_provider_resolver` @ `76cb977ad65235a9d965efc014c87bcad00e4960`).
+**Undo before merging this PR:**
+
+- [ ] `test/e2e/scripts/maas-image-defaults.sh` — remove PR699 default block; fall back to `odh-stable` / snapshot
+- [ ] `test/e2e/scripts/prow_run_ai_gateway_controller_test.sh` — remove TEMP header comment
+- [ ] `hack/tekton/pr-group-testing-pipeline.yaml` — restore `odh-praxis-extproc:${AIGC_TAG}` fallback (or odh-praxis-extproc-ci snapshot only)
+- [ ] `test/e2e/scripts/run_e2e_tests.sh` — uncomment `test_external_models.py` when external-model reconciler is ready
+
+Publish the PR699 praxis image to Quay (if not already present) before `/group-test`:
+
+```bash
+# Build from opendatahub-io/praxis-extproc with praxis-ai rev 76cb977 (see session notes / local /tmp build)
+podman tag odh-praxis-extproc:pr699-76cb977 quay.io/opendatahub/odh-praxis-extproc:pr699-76cb977
+podman push quay.io/opendatahub/odh-praxis-extproc:pr699-76cb977
+```
+
 ## Done in this repo
 
 - [x] MaaS e2e sync + **kustomize-mode** deploy (prow owns MaaS; no ODH ModelsAsService path)
@@ -11,7 +30,7 @@
 
 [jland-redhat/odh-konflux-central](https://github.com/jland-redhat/odh-konflux-central) `main` (synced with upstream):
 
-- [x] `integration-tests/ai-gateway-controller/pr-group-testing-pipeline.yaml`
+- [x] `integration-tests/ai-gateway-controller/pr-group-testing-pipeline.yaml` (includes PR699 praxis pin + TODO; synced from `hack/tekton/`)
 - [x] `gitops/integration-testing-prerequisites.yaml` — `ai-gateway-controller-group`
 
 - [ ] Open PR to `opendatahub-io/odh-konflux-central` and merge (include `hack/tekton/pr-group-testing-pipeline.yaml`: no must-gather, PRAXIS tag from snapshot)
@@ -31,6 +50,7 @@
 | `maas-api` | `quay.io/opendatahub/maas-api:latest` (MaaS `main` push) |
 | `maas-controller` | `quay.io/opendatahub/maas-controller:latest` (MaaS `main` push) |
 | `ai-gateway-controller` | PR snapshot digest from `odh-ai-gateway-controller-ci` |
+| `praxis-extproc` | **TEMP:** `quay.io/opendatahub/odh-praxis-extproc:pr699-76cb977` (praxis-proxy/ai#699); revert to `odh-praxis-extproc-ci` / `odh-stable` before merge |
 
 Override MaaS tags with `MAAS_IMAGE_TAG` or explicit `MAAS_*_IMAGE` env vars.
 

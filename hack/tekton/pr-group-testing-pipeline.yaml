@@ -7,6 +7,11 @@ spec:
     Group integration test for ai-gateway-controller. Provisions an ephemeral Hypershift
     cluster and runs MaaS e2e tests (without external-model modules) using the PR-built
     odh-ai-gateway-controller-ci image.
+
+    TEMP (remove before merge): defaults PRAXIS_EXTPROC_IMAGE to
+    quay.io/opendatahub/odh-praxis-extproc:pr699-76cb977 (praxis-proxy/ai#699
+    llmisvc_model_provider_resolver @ 76cb977). Revert to odh-praxis-extproc-ci from
+    the group snapshot or odh-stable once that filter is on a published tag.
   params:
     - description: List of components in the group
       name: group-components
@@ -252,15 +257,15 @@ spec:
               echo "AI_GATEWAY_CONTROLLER_IMAGE=${AI_GATEWAY_CONTROLLER_IMAGE}"
               echo "AI_GATEWAY_CONTROLLER_IMAGE (tag): ${AI_GATEWAY_CONTROLLER_IMAGE%%@*}:${AIGC_TAG}"
 
+              # TODO(before-merge): drop PR699 override; use odh-praxis-extproc-ci snapshot or
+              # odh-stable once llmisvc_model_provider_resolver is on a published odh-praxis-extproc tag.
+              PRAXIS_EXTPROC_PR699_IMAGE="quay.io/opendatahub/odh-praxis-extproc:pr699-76cb977"
               PRAXIS_FROM_SNAPSHOT=$(jq -r '."odh-praxis-extproc-ci".image // empty' <<< "${SNAPSHOT}")
               if [ -n "${PRAXIS_FROM_SNAPSHOT}" ] && [ "${PRAXIS_FROM_SNAPSHOT}" != "null" ]; then
                 export PRAXIS_EXTPROC_IMAGE="${PRAXIS_FROM_SNAPSHOT}"
               else
-                # Align praxis tag with the PR controller tag when praxis is not a separate
-                # group component. Add odh-praxis-extproc-ci to group-components once Konflux
-                # builds it for this repo.
-                export PRAXIS_EXTPROC_IMAGE="quay.io/opendatahub/odh-praxis-extproc:${AIGC_TAG}"
-                echo "NOTE: odh-praxis-extproc-ci not in SNAPSHOT; using PRAXIS_EXTPROC_IMAGE=${PRAXIS_EXTPROC_IMAGE}"
+                export PRAXIS_EXTPROC_IMAGE="${PRAXIS_EXTPROC_IMAGE:-${PRAXIS_EXTPROC_PR699_IMAGE}}"
+                echo "NOTE: odh-praxis-extproc-ci not in SNAPSHOT; using PRAXIS_EXTPROC_IMAGE=${PRAXIS_EXTPROC_IMAGE} (praxis-proxy/ai#699 @ 76cb977)"
               fi
 
               export MAAS_API_IMAGE="${MAAS_API_IMAGE:-quay.io/opendatahub/maas-api:latest}"

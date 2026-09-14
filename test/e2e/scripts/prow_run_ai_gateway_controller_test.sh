@@ -1,6 +1,10 @@
 #!/bin/bash
 # ai-gateway-controller Konflux / Prow e2e orchestrator.
 #
+# TEMP (remove before merge): defaults PRAXIS_EXTPROC_IMAGE to quay.io/opendatahub/odh-praxis-extproc:pr699-76cb977,
+# built with praxis-proxy/ai#699 (llmisvc_model_provider_resolver @ 76cb977). Revert to odh-stable / Konflux
+# odh-praxis-extproc-ci snapshot once that filter is on a published odh-praxis-extproc tag.
+#
 # USAGE:
 #   AI_GATEWAY_CONTROLLER_IMAGE=quay.io/opendatahub/odh-ai-gateway-controller:odh-pr \
 #     ./test/e2e/scripts/prow_run_ai_gateway_controller_test.sh
@@ -38,7 +42,6 @@ export MAAS_API_IMAGE
 export MAAS_CONTROLLER_IMAGE
 export AI_GATEWAY_OPERATOR_IMAGE=${AI_GATEWAY_OPERATOR_IMAGE:-}
 export AI_GATEWAY_CONTROLLER_IMAGE
-export PRAXIS_EXTPROC_IMAGE="${PRAXIS_EXTPROC_IMAGE:-}"
 export OPERATOR_CATALOG=${OPERATOR_CATALOG:-}
 export OPERATOR_IMAGE=${OPERATOR_IMAGE:-}
 DEPLOY_MODE=${DEPLOY_MODE:-kustomize}
@@ -104,7 +107,7 @@ check_prerequisites() {
     echo "MAAS_API_IMAGE: ${MAAS_API_IMAGE}"
     echo "MAAS_CONTROLLER_IMAGE: ${MAAS_CONTROLLER_IMAGE}"
     echo "AI_GATEWAY_CONTROLLER_IMAGE: ${AI_GATEWAY_CONTROLLER_IMAGE}"
-    [[ -n "${PRAXIS_EXTPROC_IMAGE:-}" ]] && echo "PRAXIS_EXTPROC_IMAGE: ${PRAXIS_EXTPROC_IMAGE}"
+    echo "PRAXIS_EXTPROC_IMAGE: ${PRAXIS_EXTPROC_IMAGE}"
 }
 
 enable_tenant_namespace_discovery_for_e2e() {

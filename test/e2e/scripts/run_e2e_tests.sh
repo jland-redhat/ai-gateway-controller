@@ -1,5 +1,7 @@
 #!/bin/bash
 # ai-gateway-controller e2e runner — MaaS pytest suite without external-model tests.
+# TODO(before-merge): uncomment test_external_models.py once ai-gateway-controller external-model
+# reconciler is implemented and Konflux can run egress fixtures (see test/e2e/tests/test_external_models.py).
 
 set -euo pipefail
 
@@ -71,6 +73,8 @@ e2e_test_files=(
     "$TEST_DIR/tests/test_tenant_rate_limit_isolation.py"
     "$TEST_DIR/tests/test_per_tenant_ipp_isolation.py"
     "$TEST_DIR/tests/test_embedding_inference.py"
+    # TODO(before-merge): enable external-model e2e when reconciler lands:
+    # "$TEST_DIR/tests/test_external_models.py"
 )
 
 resolved_extra_args=()

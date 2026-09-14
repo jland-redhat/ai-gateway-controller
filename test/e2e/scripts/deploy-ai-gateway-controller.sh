@@ -34,8 +34,10 @@ MAAS_CONTROLLER_PAUSED=false
 MAAS_CONTROLLER_RESUME_REPLICAS="${MAAS_CONTROLLER_RESUME_REPLICAS:-1}"
 
 REMOVE_MAAS_IPP="${REMOVE_MAAS_IPP:-${SCALE_DOWN_PAYLOAD_PROCESSING:-true}}"
-PRAXIS_INSTALL_TIMEOUT="${PRAXIS_INSTALL_TIMEOUT:-180}"
+PRAXIS_INSTALL_TIMEOUT="${PRAXIS_INSTALL_TIMEOUT:-300}"
 MANAGED_FALSE_ANNOTATION="${MANAGED_FALSE_ANNOTATION:-opendatahub.io/managed=false}"
+AITENANT_NAME="${AITENANT_NAME:-models-as-a-service}"
+AITENANT_NAMESPACE="${AITENANT_NAMESPACE:-ai-tenants}"
 
 _default_praxis_image() {
   local params="${PROJECT_ROOT}/config/self/default/params.env"
@@ -60,6 +62,8 @@ _derive_praxis_image_from_controller() {
     fi
   fi
 }
+# Prow/Tekton set PRAXIS_EXTPROC_IMAGE via maas-image-defaults.sh (TEMP: pr699-76cb977).
+# When unset, fall back to params.env, controller tag alignment, then odh-stable.
 PRAXIS_EXTPROC_IMAGE="${PRAXIS_EXTPROC_IMAGE:-$(_default_praxis_image)}"
 PRAXIS_EXTPROC_IMAGE="${PRAXIS_EXTPROC_IMAGE:-$(_derive_praxis_image_from_controller)}"
 PRAXIS_EXTPROC_IMAGE="${PRAXIS_EXTPROC_IMAGE:-quay.io/opendatahub/odh-praxis-extproc:odh-stable}"
@@ -217,6 +221,16 @@ _wait_for_praxis_extproc() {
   return 1
 }
 
+_enable_praxis_on_default_aitenant() {
+  if ! oc get aitenant "${AITENANT_NAME}" -n "${AITENANT_NAMESPACE}" &>/dev/null; then
+    echo "WARN: AITenant ${AITENANT_NAMESPACE}/${AITENANT_NAME} not found; skipping praxis opt-in annotation" >&2
+    return 0
+  fi
+  echo "Opting default AITenant into praxis dataplane (maas.opendatahub.io/payload-processing-type=praxis) ..."
+  oc annotate aitenant "${AITENANT_NAME}" -n "${AITENANT_NAMESPACE}" \
+    maas.opendatahub.io/payload-processing-type=praxis --overwrite
+}
+
 _protect_praxis_from_maas_reconcile() {
   echo "Annotating praxis IPP resources ${MANAGED_FALSE_ANNOTATION} so maas-controller skips them ..."
   local name kind
@@ -261,6 +275,7 @@ fi
 _apply_ai_gateway_controller
 
 if [[ "${REMOVE_MAAS_IPP}" == "true" ]]; then
+  _enable_praxis_on_default_aitenant
   _wait_for_praxis_extproc
   _protect_praxis_from_maas_reconcile
   _resume_maas_controller
