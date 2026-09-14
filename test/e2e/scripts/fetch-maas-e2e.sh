@@ -16,7 +16,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="${PROJECT_ROOT:-$(cd "${SCRIPT_DIR}/../../.." && pwd)}"
 
-MAAS_REPO="${MAAS_REPO:-https://github.com/opendatahub-io/models-as-a-service}"
+# Until opendatahub-io/models-as-a-service merges aigc e2e fixes, fetch from fork.
+# TODO: revert default to https://github.com/opendatahub-io/models-as-a-service after merge.
+MAAS_REPO="${MAAS_REPO:-https://github.com/jland-redhat/models-as-a-service}"
 MAAS_REF="${MAAS_REF:-main}"
 MAAS_CHECKOUT_ROOT="${MAAS_CHECKOUT_ROOT:-${PROJECT_ROOT}/test/maas-e2e}"
 LOCK_FILE="${MAAS_LOCK_FILE:-${PROJECT_ROOT}/test/maas-e2e.lock}"

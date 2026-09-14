@@ -2,7 +2,9 @@
 
 Tests and deploy tooling come from [models-as-a-service](https://github.com/opendatahub-io/models-as-a-service) at runtime (`test/e2e/scripts/fetch-maas-e2e.sh`).
 
-**Pin policy:** `test/maas-e2e.lock` holds a fixed commit SHA (currently `53fdb8a1` — MaaS `main` tip as of 2026-09-14). Prow/CI always fetch that SHA; they do **not** track rolling `main`. Bump the lock only after e2e passes on a newer MaaS revision.
+**Pin policy:** `test/maas-e2e.lock` holds a fixed commit SHA (currently `630e7b5` on `jland-redhat/models-as-a-service` branch `aigc-e2e-praxis-and-poll-fixes`). Prow/CI always fetch that SHA; they do **not** track rolling `main`. Bump the lock only after e2e passes on a newer MaaS revision.
+
+**Fork pin (temporary):** `fetch-maas-e2e.sh` defaults to `jland-redhat/models-as-a-service` until [upstream MaaS PR](https://github.com/opendatahub-io/models-as-a-service/compare/main...jland-redhat:aigc-e2e-praxis-and-poll-fixes) merges praxis log-skip and poll flake fixes. Then revert `MAAS_REPO` default and lock `maas_repo` to `opendatahub-io`.
 
 ```bash
 # Bump pin to latest main (updates test/maas-e2e.lock after fetch):
@@ -40,7 +42,7 @@ Some e2e fixes from the vendored branch (`ci/maas-e2e-konflux-group-test`) are *
 | **Upstream MaaS PR** (preferred) | Fix belongs in shared MaaS tests (praxis log skip, `_poll_status` flakes, duplicate-header warmup) | All MaaS consumers benefit; slower until merged |
 | **aigc post-fetch patch** (`patch-maas-tests-for-aigc.sh`, not added yet) | Short-term CI unblock while upstream PR is open | Duplicated logic; must re-apply after every lock bump |
 
-**Current choice:** upstream-first — no test patch script yet. Deploy patches stay in `patch-maas-deploy-for-aigc.sh`. If `/group-test` flakes on the pinned MaaS commit, either open MaaS PRs for the rows below or add a minimal post-fetch patch script here.
+**Current choice:** upstream-first — MaaS PR open for praxis/`_poll_status`/duplicate-header rows; fork pin `630e7b5` until merge. Deploy patches stay in `patch-maas-deploy-for-aigc.sh`.
 
 ---
 
