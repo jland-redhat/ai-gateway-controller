@@ -1159,7 +1159,12 @@ def extproc_deployment_uses_praxis(
 
 
 def ipp_logs_show_recent_activity(log_text: str) -> bool:
-    """Detect legacy Go IPP per-request log lines (praxis-extproc is quiet at INFO)."""
+    """Detect legacy Go IPP per-request log lines (praxis-extproc is quiet at INFO).
+
+    praxis-extproc (Rust) does not emit per-request lines at default log levels;
+    :9090/metrics was also empty/unhelpful in e2e probes. Tests that opt the
+    default tenant into praxis skip this check and rely on HTTP 200 instead.
+    """
     markers = ("x-request-id", "handlers/server.go", "processing request headers")
     return any(marker in log_text for marker in markers)
 

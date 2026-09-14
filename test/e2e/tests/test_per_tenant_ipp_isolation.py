@@ -372,6 +372,8 @@ class TestPerTenantIPPRouting:
         tenant_logs = deployment_log_snapshot(
             tenant_names["processing_deployment"], since="1m"
         )
+        # praxis-extproc does not log per-request activity at INFO and metrics :9090
+        # did not expose useful counters in CI; hybrid BBR HTTP 200 is the signal.
         if extproc_deployment_uses_praxis(default_names["processing_deployment"]):
             log.info(
                 "Default dataplane uses praxis-extproc (no per-request log markers); "
