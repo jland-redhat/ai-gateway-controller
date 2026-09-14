@@ -1,8 +1,9 @@
 # Test run artifacts — keep directories, ignore contents
 **/artifacts/*
 !**/artifacts/.gitkeep
-**/reports/*
+**/reports/**
 !**/reports/.gitkeep
+!**/reports/.gitignore
 
 # Local e2e Python env / cache
 **/__pycache__/
