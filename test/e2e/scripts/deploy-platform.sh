@@ -70,7 +70,7 @@ deploy_maas_platform() {
     echo "Using policy engine: ${POLICY_ENGINE} (Authorino namespace: ${AUTHORINO_NAMESPACE})"
     export MODEL_NAMESPACE
     local deploy_cmd=(
-        "${MAAS_CHECKOUT_ROOT}/scripts/deploy.sh"
+        bash "${MAAS_CHECKOUT_ROOT}/scripts/deploy.sh"
         --deployment-mode "${DEPLOY_MODE}"
         --policy-engine "${POLICY_ENGINE}"
     )

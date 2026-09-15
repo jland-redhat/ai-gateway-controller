@@ -65,9 +65,6 @@ _fetch_maas_checkout() {
   git -C "${tmp_dir}" checkout -q FETCH_HEAD
   mv "${tmp_dir}" "${MAAS_CHECKOUT_ROOT}"
 
-  find "${MAAS_CHECKOUT_ROOT}/scripts" "${MAAS_CHECKOUT_ROOT}/.github/hack" \
-    -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
-
   local resolved_commit
   resolved_commit="$(git -C "${MAAS_CHECKOUT_ROOT}" rev-parse HEAD)"
   echo "MaaS checkout at: ${resolved_commit}"
@@ -103,6 +100,13 @@ _ensure_maas_checkout() {
   _fetch_maas_checkout "${fetch_ref}"
 }
 
+_ensure_maas_script_perms() {
+  # Shallow fetch and Python patches rewrite scripts without the executable bit.
+  find "${MAAS_CHECKOUT_ROOT}/scripts" "${MAAS_CHECKOUT_ROOT}/.github/hack" \
+    "${MAAS_CHECKOUT_ROOT}/test/e2e/scripts" \
+    -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
+}
+
 _ensure_maas_checkout
 
 export MAAS_CHECKOUT_ROOT
@@ -122,3 +126,4 @@ done
 
 # shellcheck disable=SC1091
 source "${SCRIPT_DIR}/patch-maas-deploy-for-aigc.sh"
+_ensure_maas_script_perms
