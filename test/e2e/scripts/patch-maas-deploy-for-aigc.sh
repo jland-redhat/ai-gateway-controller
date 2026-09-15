@@ -16,7 +16,7 @@ fi
 
 if grep -qF "${MARKER}" "${DEPLOY_SH}" && grep -qF "${OPTIONAL_OPS_MARKER}" "${DEPLOY_SH}"; then
   echo "deploy.sh already patched for ai-gateway-controller"
-  exit 0
+  return 0 2>/dev/null || exit 0
 fi
 
 if ! grep -qF "${MARKER}" "${DEPLOY_SH}"; then

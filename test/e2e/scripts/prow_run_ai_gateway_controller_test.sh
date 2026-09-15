@@ -16,7 +16,9 @@ _find_project_root_bootstrap() {
   while [[ "$dir" != "/" && ! -e "$dir/.git" ]]; do dir="$(dirname "$dir")"; done
   [[ -e "$dir/.git" ]] && printf '%s\n' "$dir" || return 1
 }
-PROJECT_ROOT="$(_find_project_root_bootstrap)"
+AIGC_PROJECT_ROOT="$(_find_project_root_bootstrap)"
+export AIGC_PROJECT_ROOT
+PROJECT_ROOT="$AIGC_PROJECT_ROOT"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Fetch models-as-a-service (tests, deploy.sh, deployment/) — see test/maas-e2e.lock
@@ -27,11 +29,13 @@ POD_TIMEOUT=${POD_TIMEOUT:-600}
 export POD_TIMEOUT
 
 source "${MAAS_CHECKOUT_ROOT}/scripts/deployment-helpers.sh"
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/maas-image-defaults.sh"
 source "${MAAS_E2E_DIR}/scripts/auth_utils.sh"
+# auth_utils.sh sets PROJECT_ROOT to the MaaS checkout; keep ai-gateway-controller root.
+PROJECT_ROOT="$AIGC_PROJECT_ROOT"
 # shellcheck disable=SC1091
 source "${SCRIPT_DIR}/aigc-artifacts.sh"
-# shellcheck disable=SC1091
-source "$PROJECT_ROOT/test/e2e/scripts/maas-image-defaults.sh"
 
 SKIP_DEPLOYMENT=${SKIP_DEPLOYMENT:-false}
 SKIP_VALIDATION=${SKIP_VALIDATION:-false}

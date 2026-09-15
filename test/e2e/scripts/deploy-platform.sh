@@ -8,17 +8,19 @@
 
 set -euo pipefail
 
-# Bootstrap: find PROJECT_ROOT and source helpers if not already loaded.
-if [[ -z "${PROJECT_ROOT:-}" ]]; then
+# Bootstrap: ai-gateway-controller repo root (MaaS auth_utils.sh overwrites PROJECT_ROOT).
+if [[ -z "${AIGC_PROJECT_ROOT:-}" ]]; then
     _dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    PROJECT_ROOT="$(cd "$_dir/../../.." && pwd)"
+    AIGC_PROJECT_ROOT="$(cd "$_dir/../../.." && pwd)"
 fi
+PROJECT_ROOT="${AIGC_PROJECT_ROOT}"
 if [[ -z "${MAAS_CHECKOUT_ROOT:-}" ]]; then
     # shellcheck disable=SC1091
     source "${PROJECT_ROOT}/test/e2e/scripts/fetch-maas-e2e.sh"
 fi
 [[ "$(type -t find_project_root 2>/dev/null)" == "function" ]] || source "${MAAS_CHECKOUT_ROOT}/scripts/deployment-helpers.sh"
 [[ "$(type -t apply_default_oidc_for_keycloak 2>/dev/null)" == "function" ]] || source "${MAAS_E2E_DIR}/scripts/auth_utils.sh"
+PROJECT_ROOT="${AIGC_PROJECT_ROOT}"
 
 # Env defaults (no-op if already set by orchestrator)
 DEPLOY_MODE="${DEPLOY_MODE:-kustomize}"
