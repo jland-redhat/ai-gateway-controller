@@ -37,6 +37,15 @@ PROJECT_ROOT="$AIGC_PROJECT_ROOT"
 # shellcheck disable=SC1091
 source "${SCRIPT_DIR}/aigc-artifacts.sh"
 
+_source_maas_e2e_script() {
+  # MaaS e2e helpers expect the models-as-a-service repo root for fixtures/scripts.
+  local script="$1"
+  PROJECT_ROOT="$MAAS_CHECKOUT_ROOT"
+  # shellcheck disable=SC1090
+  source "$script"
+  PROJECT_ROOT="$AIGC_PROJECT_ROOT"
+}
+
 SKIP_DEPLOYMENT=${SKIP_DEPLOYMENT:-false}
 SKIP_VALIDATION=${SKIP_VALIDATION:-false}
 SKIP_AUTH_CHECK=${SKIP_AUTH_CHECK:-true}
@@ -275,8 +284,7 @@ else
 
     print_header "Deploying Models"
     phase_mark deploy_models start
-    # shellcheck disable=SC1091
-    source "${MAAS_E2E_DIR}/scripts/deploy-models.sh"
+    _source_maas_e2e_script "${MAAS_E2E_DIR}/scripts/deploy-models.sh"
     phase_mark deploy_models end
     patch_authorino_debug
 
@@ -291,8 +299,7 @@ print_header "Setting up variables for tests"
 setup_vars_for_tests
 
 print_header "Setting up test tokens"
-# shellcheck disable=SC1091
-source "${MAAS_E2E_DIR}/scripts/setup-test-tokens.sh"
+_source_maas_e2e_script "${MAAS_E2E_DIR}/scripts/setup-test-tokens.sh"
 
 print_header "Validating Deployment"
 phase_mark validate start

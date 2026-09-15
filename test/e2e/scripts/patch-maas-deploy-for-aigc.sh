@@ -14,12 +14,13 @@ if [[ ! -f "${DEPLOY_SH}" ]]; then
   exit 1
 fi
 
+_deploy_sh_already_patched=false
 if grep -qF "${MARKER}" "${DEPLOY_SH}" && grep -qF "${OPTIONAL_OPS_MARKER}" "${DEPLOY_SH}"; then
   echo "deploy.sh already patched for ai-gateway-controller"
-  return 0 2>/dev/null || exit 0
+  _deploy_sh_already_patched=true
 fi
 
-if ! grep -qF "${MARKER}" "${DEPLOY_SH}"; then
+if [[ "${_deploy_sh_already_patched}" != "true" ]] && ! grep -qF "${MARKER}" "${DEPLOY_SH}"; then
   python3 - <<'PY' "${DEPLOY_SH}" "${MARKER}"
 import sys
 path, marker = sys.argv[1], sys.argv[2]
@@ -48,7 +49,7 @@ open(path, "w").write(text.replace(old, new, 1))
 PY
 fi
 
-if ! grep -qF "${OPTIONAL_OPS_MARKER}" "${DEPLOY_SH}"; then
+if [[ "${_deploy_sh_already_patched}" != "true" ]] && ! grep -qF "${OPTIONAL_OPS_MARKER}" "${DEPLOY_SH}"; then
   if grep -qF 'install_optional_operators() {' "${DEPLOY_SH}"; then
     awk -v marker="${OPTIONAL_OPS_MARKER}" '
       /install_optional_operators\(\) \{/ { print; getline; print; getline; print; print ""; print "  local data_dir=\"${SCRIPT_DIR}/data\""; print ""; print "  # " marker; print "  if kubectl get deployment -n cert-manager-operator cert-manager-operator-controller-manager -o jsonpath='"'"'{.status.availableReplicas}'"'"' 2>/dev/null | grep -q '"'"'[1-9]'"'"' \\"; print "    && kubectl get csv -n openshift-lws-operator leader-worker-set.v1.0.0 -o jsonpath='"'"'{.status.phase}'"'"' 2>/dev/null | grep -q Succeeded; then"; print "    log_info \"cert-manager and LWS already installed; skipping subscription apply\""; print "    log_info \"Activating LeaderWorkerSet API...\""; print "    kubectl apply -f \"${data_dir}/lws-operator-cr.yaml\""; print "    log_info \"Optional operators installed\""; print "    return 0"; print "  fi"; print ""; skip=2; next }
@@ -58,14 +59,43 @@ if ! grep -qF "${OPTIONAL_OPS_MARKER}" "${DEPLOY_SH}"; then
   fi
 fi
 
-if ! grep -qF "${MARKER}" "${DEPLOY_SH}"; then
-  echo "ERROR: failed to patch ${DEPLOY_SH}" >&2
-  exit 1
+if [[ "${_deploy_sh_already_patched}" != "true" ]]; then
+  if ! grep -qF "${MARKER}" "${DEPLOY_SH}"; then
+    echo "ERROR: failed to patch ${DEPLOY_SH}" >&2
+    exit 1
+  fi
+  echo "Patched ${DEPLOY_SH}"
 fi
 
-echo "Patched ${DEPLOY_SH}"
-
 DEPLOY_MODELS_SH="${MAAS_CHECKOUT_ROOT}/test/e2e/scripts/deploy-models.sh"
+FIXTURES_MARKER="ai-gateway-controller: resolve fixture root from MaaS checkout"
+if [[ -f "${DEPLOY_MODELS_SH}" ]] && ! grep -qF "${FIXTURES_MARKER}" "${DEPLOY_MODELS_SH}"; then
+  python3 - <<'PY' "${DEPLOY_MODELS_SH}" "${FIXTURES_MARKER}"
+import sys
+path, marker = sys.argv[1], sys.argv[2]
+text = open(path).read()
+replacements = [
+    (
+        '[[ "$(type -t find_project_root 2>/dev/null)" == "function" ]] || source "$PROJECT_ROOT/scripts/deployment-helpers.sh"',
+        f'# {marker}\n[[ "$(type -t find_project_root 2>/dev/null)" == "function" ]] || source "${{MAAS_CHECKOUT_ROOT:-$PROJECT_ROOT}}/scripts/deployment-helpers.sh"',
+    ),
+    (
+        '(cd "$PROJECT_ROOT" && kustomize build test/e2e/fixtures/',
+        '(cd "${MAAS_CHECKOUT_ROOT:-$PROJECT_ROOT}" && kustomize build test/e2e/fixtures/',
+    ),
+]
+for old, new in replacements:
+    if old not in text:
+        if marker in text:
+            sys.exit(0)
+        print(f"WARN: deploy-models.sh block not found for patch: {old[:60]}...", file=sys.stderr)
+        sys.exit(0)
+    text = text.replace(old, new, 1)
+open(path, "w").write(text)
+PY
+  echo "Patched ${DEPLOY_MODELS_SH} (MaaS checkout fixture root)"
+fi
+
 AUTHPOLICY_MARKER="ai-gateway-controller: wait only for MaaS-managed AuthPolicies"
 if [[ -f "${DEPLOY_MODELS_SH}" ]] && ! grep -qF "${AUTHPOLICY_MARKER}" "${DEPLOY_MODELS_SH}"; then
   python3 - <<'PY' "${DEPLOY_MODELS_SH}" "${AUTHPOLICY_MARKER}"
