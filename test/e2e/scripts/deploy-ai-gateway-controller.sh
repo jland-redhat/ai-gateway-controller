@@ -62,7 +62,7 @@ _derive_praxis_image_from_controller() {
     fi
   fi
 }
-# Prow/Tekton set PRAXIS_EXTPROC_IMAGE via maas-image-defaults.sh (TEMP: pr699-76cb977).
+# Prow/Tekton may set PRAXIS_EXTPROC_IMAGE via maas-image-defaults.sh or Konflux snapshot.
 # When unset, fall back to params.env, controller tag alignment, then odh-stable.
 PRAXIS_EXTPROC_IMAGE="${PRAXIS_EXTPROC_IMAGE:-$(_default_praxis_image)}"
 PRAXIS_EXTPROC_IMAGE="${PRAXIS_EXTPROC_IMAGE:-$(_derive_praxis_image_from_controller)}"

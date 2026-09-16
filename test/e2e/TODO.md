@@ -53,7 +53,7 @@ These were fixed in the **vendored** branch (`ci/maas-e2e-konflux-group-test`) a
 | Area | Issue | Fix (upstream or aigc) |
 |------|--------|-------------------------|
 | **Praxis default dataplane** | `test_per_tenant_ipp_isolation` expects Go IPP log markers (`handlers/server.go`, `x-request-id`) | Upstream: skip log check when deployment is `odh-praxis-extproc` (Rust quiet at INFO); rely on HTTP 200 |
-| **Praxis image / BBR** | Default tenant uses praxis; needs `llmisvc_model_provider_resolver` (praxis-proxy/ai#699) | Published image pin in prow/Tekton until Konflux builds praxis with #699; promote to `odh-praxis-extproc` |
+| **Praxis image / BBR** | Default tenant uses praxis; needs `llmisvc_model_provider_resolver` (praxis-proxy/ai#699) | `odh-praxis-extproc:odh-stable` since [praxis-extproc#79](https://github.com/opendatahub-io/praxis-extproc/pull/79) (`9872fc9`) |
 | **`_poll_status`** | Parallel workers churn `maas-gateway-auth` → empty 401/403 flakes | Upstream: re-check gateway AuthPolicy on transient empty 401/403 during poll |
 | **Duplicate subscription headers** | `test_duplicate_subscription_headers_ignored` warmup 403 under load | Upstream: 8s post-mint delay + 90s warmup poll (see `test_negative_security.py`) |
 | **`deploy.sh`** | Kustomize e2e has no `maas-controller/` source tree | **aigc:** `patch-maas-deploy-for-aigc.sh` after fetch (keep until upstream accepts `deployment/` only) |
@@ -69,5 +69,5 @@ These were fixed in the **vendored** branch (`ci/maas-e2e-konflux-group-test`) a
 
 - [ ] `RELATED_IMAGE_ODH_AI_GATEWAY_CONTROLLER_IMAGE` — operator still installs via kustomize in CI
 - [ ] Merge [odh-konflux-central](https://github.com/jland-redhat/odh-konflux-central) group-test pipeline upstream
-- [ ] TEMP praxis pin (`quay.io/maas/odh-praxis-extproc:pr699-76cb977`) — revert when Konflux `odh-praxis-extproc-ci` includes #699
+- [x] Praxis stable default (`quay.io/opendatahub/odh-praxis-extproc:odh-stable`, praxis-extproc#79 @ `9872fc9`)
 - [ ] Point `.tekton/ai-gateway-controller-group-test.yaml` at upstream konflux-central after merge
