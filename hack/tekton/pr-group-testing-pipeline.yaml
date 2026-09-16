@@ -290,9 +290,24 @@ spec:
                 mountPath: /credentials
             script: |
               set -euo pipefail
-              mkdir -p "${ARTIFACT_DIR}/gather-openshift"
+              mkdir -p "${ARTIFACT_DIR}/gather-openshift" "${ARTIFACT_DIR}/gather-maas"
               LOG="${ARTIFACT_DIR}/must-gather.log"
-              echo "Collecting must-gather (details in ${LOG}) ..."
+              MAAS_LOG="${ARTIFACT_DIR}/maas-must-gather.log"
+              export DEPLOYMENT_NAMESPACE="${DEPLOYMENT_NAMESPACE:-opendatahub}"
+              export MAAS_SUBSCRIPTION_NAMESPACE="${MAAS_SUBSCRIPTION_NAMESPACE:-models-as-a-service}"
+              export AITENANT_NAMESPACE="${AITENANT_NAMESPACE:-ai-tenants}"
+              export GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE:-openshift-ingress}"
+              export AUTHORINO_NAMESPACE="${AUTHORINO_NAMESPACE:-kuadrant-system}"
+              export LLM_NAMESPACE="${LLM_NAMESPACE:-llm}"
+              export ISTIO_NAMESPACE="${ISTIO_NAMESPACE:-istio-system}"
+              echo "Collecting MaaS diagnostics (details in ${MAAS_LOG}) ..."
+              {
+                echo "=== MaaS must-gather started at $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
+                ./test/e2e/scripts/collect-maas-must-gather.sh "${ARTIFACT_DIR}/gather-maas"
+                echo "=== MaaS must-gather finished at $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
+              } >>"${MAAS_LOG}" 2>&1
+              echo "MaaS must-gather complete"
+              echo "Collecting OpenShift must-gather (details in ${LOG}) ..."
               {
                 echo "=== must-gather started at $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
                 oc adm must-gather --dest-dir "${ARTIFACT_DIR}/gather-openshift"

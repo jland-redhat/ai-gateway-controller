@@ -86,6 +86,11 @@ const (
 	// maas-controller's tenantreconcile.LabelTenantInstance).
 	LabelTenantInstance = "maas.opendatahub.io/tenant-instance"
 
+	// TODO(ipp-migration): Re-enable with stampAIGCManagedByOnDeployment in rename.go
+	// once maas-controller SkipIPP cleanup is fixed upstream.
+	// LabelManagedBy  = "app.kubernetes.io/managed-by"
+	// ManagedByAIGC   = "ai-gateway-controller"
+
 	// maxKubernetesNameLength is the Kubernetes object name limit (RFC 1123
 	// label / DNS subdomain component). Rename returns an error rather than
 	// applying a name that would exceed it.
