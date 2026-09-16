@@ -278,44 +278,43 @@ _enable_praxis_on_default_aitenant() {
     maas.opendatahub.io/payload-processing-type=praxis --overwrite
 }
 
-# TODO(ipp-migration): Re-enable once maas-controller SkipIPP cleanup is fixed upstream.
-# _stamp_praxis_pods_managed_by() {
-#   # maas-controller SkipIPP cleanup skips pods labeled app.kubernetes.io/managed-by=ai-gateway-controller.
-#   echo "Stamping app.kubernetes.io/managed-by=ai-gateway-controller on praxis workload Deployments ..."
-#   local name
-#   for name in "${IPP_NAMES[@]}"; do
-#     if ! oc get deployment "${name}" -n "${GATEWAY_NAMESPACE}" &>/dev/null; then
-#       continue
-#     fi
-#     oc patch deployment "${name}" -n "${GATEWAY_NAMESPACE}" --type=merge -p \
-#       '{"metadata":{"labels":{"app.kubernetes.io/managed-by":"ai-gateway-controller"}},"spec":{"template":{"metadata":{"labels":{"app.kubernetes.io/managed-by":"ai-gateway-controller"}}}}}' \
-#       2>/dev/null || true
-#     oc rollout status deployment/"${name}" -n "${GATEWAY_NAMESPACE}" --timeout=120s 2>/dev/null || true
-#   done
-# }
-#
-# _wait_for_default_maastenantconfig_ready() {
-#   echo "Waiting for MaasTenantConfig/${DEFAULT_TENANT_CONFIG_NAME} Ready (timeout: ${DEFAULT_TENANT_READY_TIMEOUT}s) ..."
-#   local deadline=$((SECONDS + DEFAULT_TENANT_READY_TIMEOUT))
-#   while [[ $SECONDS -lt $deadline ]]; do
-#     local ready reason message
-#     ready="$(oc get maastenantconfig "${DEFAULT_TENANT_CONFIG_NAME}" -n "${MAAS_SUBSCRIPTION_NAMESPACE}" \
-#       -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")"
-#     if [[ "${ready}" == "True" ]]; then
-#       echo "MaasTenantConfig/${DEFAULT_TENANT_CONFIG_NAME} is Ready"
-#       return 0
-#     fi
-#     reason="$(oc get maastenantconfig "${DEFAULT_TENANT_CONFIG_NAME}" -n "${MAAS_SUBSCRIPTION_NAMESPACE}" \
-#       -o jsonpath='{.status.conditions[?(@.type=="Ready")].reason}' 2>/dev/null || echo "")"
-#     message="$(oc get maastenantconfig "${DEFAULT_TENANT_CONFIG_NAME}" -n "${MAAS_SUBSCRIPTION_NAMESPACE}" \
-#       -o jsonpath='{.status.conditions[?(@.type=="Ready")].message}' 2>/dev/null || echo "")"
-#     echo "  Waiting... Ready=${ready:-Unknown} reason=${reason:-n/a} message=${message:-n/a}"
-#     sleep 5
-#   done
-#   echo "ERROR: MaasTenantConfig/${DEFAULT_TENANT_CONFIG_NAME} not Ready within ${DEFAULT_TENANT_READY_TIMEOUT}s" >&2
-#   oc get maastenantconfig "${DEFAULT_TENANT_CONFIG_NAME}" -n "${MAAS_SUBSCRIPTION_NAMESPACE}" -o yaml 2>&1 | tail -50 || true
-#   return 1
-# }
+_stamp_praxis_pods_managed_by() {
+  # Workaround: maas-controller SkipIPP cleanup skips pods labeled managed-by=ai-gateway-controller.
+  echo "Stamping app.kubernetes.io/managed-by=ai-gateway-controller on praxis workload Deployments ..."
+  local name
+  for name in "${IPP_NAMES[@]}"; do
+    if ! oc get deployment "${name}" -n "${GATEWAY_NAMESPACE}" &>/dev/null; then
+      continue
+    fi
+    oc patch deployment "${name}" -n "${GATEWAY_NAMESPACE}" --type=merge -p \
+      '{"metadata":{"labels":{"app.kubernetes.io/managed-by":"ai-gateway-controller"}},"spec":{"template":{"metadata":{"labels":{"app.kubernetes.io/managed-by":"ai-gateway-controller"}}}}}' \
+      2>/dev/null || true
+    oc rollout status deployment/"${name}" -n "${GATEWAY_NAMESPACE}" --timeout=120s 2>/dev/null || true
+  done
+}
+
+_wait_for_default_maastenantconfig_ready() {
+  echo "Waiting for MaasTenantConfig/${DEFAULT_TENANT_CONFIG_NAME} Ready (timeout: ${DEFAULT_TENANT_READY_TIMEOUT}s) ..."
+  local deadline=$((SECONDS + DEFAULT_TENANT_READY_TIMEOUT))
+  while [[ $SECONDS -lt $deadline ]]; do
+    local ready reason message
+    ready="$(oc get maastenantconfig "${DEFAULT_TENANT_CONFIG_NAME}" -n "${MAAS_SUBSCRIPTION_NAMESPACE}" \
+      -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")"
+    if [[ "${ready}" == "True" ]]; then
+      echo "MaasTenantConfig/${DEFAULT_TENANT_CONFIG_NAME} is Ready"
+      return 0
+    fi
+    reason="$(oc get maastenantconfig "${DEFAULT_TENANT_CONFIG_NAME}" -n "${MAAS_SUBSCRIPTION_NAMESPACE}" \
+      -o jsonpath='{.status.conditions[?(@.type=="Ready")].reason}' 2>/dev/null || echo "")"
+    message="$(oc get maastenantconfig "${DEFAULT_TENANT_CONFIG_NAME}" -n "${MAAS_SUBSCRIPTION_NAMESPACE}" \
+      -o jsonpath='{.status.conditions[?(@.type=="Ready")].message}' 2>/dev/null || echo "")"
+    echo "  Waiting... Ready=${ready:-Unknown} reason=${reason:-n/a} message=${message:-n/a}"
+    sleep 5
+  done
+  echo "ERROR: MaasTenantConfig/${DEFAULT_TENANT_CONFIG_NAME} not Ready within ${DEFAULT_TENANT_READY_TIMEOUT}s" >&2
+  oc get maastenantconfig "${DEFAULT_TENANT_CONFIG_NAME}" -n "${MAAS_SUBSCRIPTION_NAMESPACE}" -o yaml 2>&1 | tail -50 || true
+  return 1
+}
 
 _protect_praxis_from_maas_reconcile() {
   echo "Annotating praxis IPP resources ${MANAGED_FALSE_ANNOTATION} so maas-controller skips them ..."
@@ -368,9 +367,8 @@ if [[ "${REMOVE_MAAS_IPP}" == "true" ]]; then
   _remove_stale_payload_processing_before_wait
   _wait_for_praxis_extproc
   _protect_praxis_from_maas_reconcile
-  # TODO(ipp-migration): re-enable with managed-by label (see test/e2e/TODO.md)
-  # _stamp_praxis_pods_managed_by
-  # _wait_for_default_maastenantconfig_ready
+  _stamp_praxis_pods_managed_by
+  _wait_for_default_maastenantconfig_ready
 fi
 
 assert_praxis_extproc_image

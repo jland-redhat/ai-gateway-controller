@@ -81,10 +81,9 @@ func TestRenameDefaultTenantDoesNotMutateDeploymentSelector(t *testing.T) {
 	if podLabels[LabelTenantInstance] != PayloadProcessingName {
 		t.Fatalf("pod template tenant-instance label = %q, want %q", podLabels[LabelTenantInstance], PayloadProcessingName)
 	}
-	// TODO(ipp-migration): re-enable when stampAIGCManagedByOnDeployment is restored.
-	// if podLabels[LabelManagedBy] != ManagedByAIGC {
-	// 	t.Fatalf("pod template managed-by label = %q, want %q", podLabels[LabelManagedBy], ManagedByAIGC)
-	// }
+	if podLabels[LabelManagedBy] != ManagedByAIGC {
+		t.Fatalf("pod template managed-by label = %q, want %q", podLabels[LabelManagedBy], ManagedByAIGC)
+	}
 }
 
 func TestRenameNonDefaultTenantPayloadProcessingDeployment(t *testing.T) {
@@ -109,10 +108,9 @@ func TestRenameNonDefaultTenantPayloadProcessingDeployment(t *testing.T) {
 	if podLabels["app"] != PayloadProcessingName || podLabels[LabelTenantInstance] != wantName {
 		t.Fatalf("pod template labels = %v, want app preserved plus %s=%q", podLabels, LabelTenantInstance, wantName)
 	}
-	// TODO(ipp-migration): re-enable when stampAIGCManagedByOnDeployment is restored.
-	// if podLabels[LabelManagedBy] != ManagedByAIGC {
-	// 	t.Fatalf("pod template managed-by label = %q, want %q", podLabels[LabelManagedBy], ManagedByAIGC)
-	// }
+	if podLabels[LabelManagedBy] != ManagedByAIGC {
+		t.Fatalf("pod template managed-by label = %q, want %q", podLabels[LabelManagedBy], ManagedByAIGC)
+	}
 
 	sa, _, _ := unstructured.NestedString(out[0].Object, "spec", "template", "spec", "serviceAccountName")
 	if sa != wantName {

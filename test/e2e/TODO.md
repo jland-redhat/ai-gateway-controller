@@ -62,7 +62,7 @@ These were fixed in the **vendored** branch (`ci/maas-e2e-konflux-group-test`) a
 | **`prow_run_*` prerequisites** | Empty `PRAXIS_EXTPROC_IMAGE` + `set -e` silent exit | **aigc-only** in `prow_run_ai_gateway_controller_test.sh` |
 | **Must-gather** | CI artifacts for HTTPRoute/LLMIS debugging | **aigc:** Tekton `must-gather` step collects `gather-maas/` (MaaS CRs, tenant readiness, logs) + `gather-openshift/`; e2e EXIT hook also writes `gather-maas/` |
 | **Webhook handoff** | Pausing `maas-controller` breaks AITenant webhook during praxis install | **aigc-only** in `deploy-ai-gateway-controller.sh` (annotate → pause → delete IPP → **resume** → apply aigc) |
-| **IPP migration cleanup** | `MaasTenantConfig` stuck: maas-controller `ensureIPPWritersStopped` errors when praxis `payload-processing` pod lacks `app.kubernetes.io/managed-by=ai-gateway-controller` | **TODO:** fix upstream in maas-controller SkipIPP path; then re-enable `stampAIGCManagedByOnDeployment` in `pkg/tenant/rename.go`, deploy-script patch + `default-tenant` Ready wait (commented out as `TODO(ipp-migration)`) |
+| **IPP migration cleanup** | `MaasTenantConfig` stuck: maas-controller `ensureIPPWritersStopped` errors when praxis `payload-processing` pod lacks `app.kubernetes.io/managed-by=ai-gateway-controller` | **Workaround (enabled):** `stampAIGCManagedByOnDeployment` in `rename.go` + deploy-script `_stamp_praxis_pods_managed_by` / `_wait_for_default_maastenantconfig_ready`. Remove once maas-controller SkipIPP path is fixed upstream. |
 
 ---
 
