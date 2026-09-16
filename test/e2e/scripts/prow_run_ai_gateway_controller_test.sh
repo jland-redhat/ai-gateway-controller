@@ -206,7 +206,6 @@ run_e2e_tests() {
     export GATEWAY_NAME
     export AITENANT_NAMESPACE
     export ENABLE_TENANT_NAMESPACE_DISCOVERY
-    enable_tenant_namespace_discovery_for_e2e || exit 1
     export E2E_SKIP_TLS_VERIFY=true
     export MODEL_NAME
     export E2E_MODEL_NAMESPACE="$MODEL_NAMESPACE"
@@ -290,6 +289,13 @@ else
     source "${SCRIPT_DIR}/deploy-ai-gateway-controller.sh"
     phase_mark deploy_ai_gateway_controller end
 fi
+
+print_header "Enabling tenant namespace discovery"
+phase_mark tenant_namespace_discovery start
+export AITENANT_NAMESPACE
+export ENABLE_TENANT_NAMESPACE_DISCOVERY
+enable_tenant_namespace_discovery_for_e2e || exit 1
+phase_mark tenant_namespace_discovery end
 
 print_header "Setting up variables for tests"
 setup_vars_for_tests
