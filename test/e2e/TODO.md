@@ -62,7 +62,7 @@ These were fixed in the **vendored** branch (`ci/maas-e2e-konflux-group-test`) a
 | **`prow_run_*` prerequisites** | Empty `PRAXIS_EXTPROC_IMAGE` + `set -e` silent exit | **aigc-only** in `prow_run_ai_gateway_controller_test.sh` |
 | **Must-gather** | CI artifacts for HTTPRoute/LLMIS debugging | **aigc:** Tekton `must-gather` step collects `gather-maas/` (MaaS CRs, tenant readiness, logs) + `gather-openshift/`; e2e EXIT hook also writes `gather-maas/` |
 | **Webhook handoff** | Pausing `maas-controller` breaks AITenant webhook during praxis install | **aigc-only** in `deploy-ai-gateway-controller.sh` (annotate → pause → delete IPP → **resume** → apply aigc) |
-| **IPP migration cleanup** | `MaasTenantConfig` stuck: maas-controller `ensureIPPWritersStopped` lists pods by `maas.opendatahub.io/tenant-instance` and fails unless live pods have `app.kubernetes.io/managed-by=ai-gateway-controller` | **Workaround (enabled):** `stampAIGCManagedByOnDeployment` in `rename.go` + deploy-script labels **running pods** (SSA-owned Deployments often reject `oc patch`) and re-labels on `IPP writer pod` errors. Remove once maas-controller SkipIPP path is fixed upstream. |
+| **IPP migration cleanup** | `MaasTenantConfig` stuck: maas-controller `ensureIPPWritersStopped` lists pods by `maas.opendatahub.io/tenant-instance` and fails unless live pods have `app.kubernetes.io/managed-by=ai-gateway-controller` | **Workaround (enabled):** pause maas-controller before praxis pods land; label running pods; resume + restart maas-controller; `stampAIGCManagedByOnDeployment` in `rename.go`. Remove once maas-controller skips pod checks for praxis-owned Deployments. |
 
 ---
 

@@ -287,28 +287,47 @@ _trigger_aigc_praxis_reconcile() {
     "reconcile-trigger=$(date +%s)" --overwrite 2>/dev/null || true
 }
 
+_label_pod_managed_by() {
+  local pod="$1"
+  [[ -z "${pod}" ]] && return 0
+  if oc label pod "${pod}" -n "${GATEWAY_NAMESPACE}" "${AIGC_MANAGED_BY_LABEL}" --overwrite; then
+    echo "  labeled pod/${pod}"
+    return 0
+  fi
+  echo "WARN: failed to label pod/${pod}" >&2
+  return 1
+}
+
 _label_praxis_writer_pods_managed_by() {
   # maas-controller ensureIPPWritersStopped checks live Pod labels (not Deployment spec).
-  local name
+  local name pod
   for name in "${IPP_NAMES[@]}"; do
-    oc label pod -n "${GATEWAY_NAMESPACE}" \
-      -l "${TENANT_INSTANCE_LABEL}=${name}" \
-      "${AIGC_MANAGED_BY_LABEL}" --overwrite 2>/dev/null || true
-    oc label pod -n "${GATEWAY_NAMESPACE}" \
-      -l "app=${name}" \
-      "${AIGC_MANAGED_BY_LABEL}" --overwrite 2>/dev/null || true
+    while IFS= read -r pod; do
+      _label_pod_managed_by "${pod}" || true
+    done < <(oc get pods -n "${GATEWAY_NAMESPACE}" \
+      -l "${TENANT_INSTANCE_LABEL}=${name}" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null)
+    while IFS= read -r pod; do
+      _label_pod_managed_by "${pod}" || true
+    done < <(oc get pods -n "${GATEWAY_NAMESPACE}" \
+      -l "app=${name}" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null)
   done
+  while IFS= read -r pod; do
+    _label_pod_managed_by "${pod}" || true
+  done < <(oc get pods -n "${GATEWAY_NAMESPACE}" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null \
+    | grep -E '^payload-(pre-)?processing-' || true)
 }
 
 _verify_praxis_writer_pods_excluded() {
-  local name pod managed_by
+  local name pod managed_by app
   for name in "${IPP_NAMES[@]}"; do
     while IFS= read -r pod; do
       [[ -z "${pod}" ]] && continue
       managed_by="$(oc get pod "${pod}" -n "${GATEWAY_NAMESPACE}" \
         -o jsonpath='{.metadata.labels.app\.kubernetes\.io/managed-by}' 2>/dev/null || true)"
+      app="$(oc get pod "${pod}" -n "${GATEWAY_NAMESPACE}" \
+        -o jsonpath='{.metadata.labels.app}' 2>/dev/null || true)"
       if [[ "${managed_by}" != "${AIGC_MANAGED_BY}" ]]; then
-        echo "ERROR: pod ${GATEWAY_NAMESPACE}/${pod} missing ${AIGC_MANAGED_BY_LABEL} (have: ${managed_by:-<none>})" >&2
+        echo "ERROR: pod ${GATEWAY_NAMESPACE}/${pod} missing ${AIGC_MANAGED_BY_LABEL} (app=${app:-<none>} managed-by=${managed_by:-<none>})" >&2
         oc get pod "${pod}" -n "${GATEWAY_NAMESPACE}" --show-labels 2>&1 || true
         return 1
       fi
@@ -318,9 +337,20 @@ _verify_praxis_writer_pods_excluded() {
   return 0
 }
 
+_nudge_maas_tenant_config_reconcile() {
+  oc annotate maastenantconfig "${DEFAULT_TENANT_CONFIG_NAME}" -n "${MAAS_SUBSCRIPTION_NAMESPACE}" \
+    "reconcile-trigger=$(date +%s)" --overwrite 2>/dev/null || true
+  if oc get deployment "${MAAS_CONTROLLER_DEPLOYMENT}" -n "${DEPLOYMENT_NAMESPACE}" &>/dev/null; then
+    echo "Restarting maas-controller to retry MaasTenantConfig reconcile ..."
+    oc rollout restart deployment/"${MAAS_CONTROLLER_DEPLOYMENT}" -n "${DEPLOYMENT_NAMESPACE}"
+    oc rollout status deployment/"${MAAS_CONTROLLER_DEPLOYMENT}" -n "${DEPLOYMENT_NAMESPACE}" --timeout=180s || true
+  fi
+}
+
 _stamp_praxis_pods_managed_by() {
   # Workaround: maas-controller SkipIPP cleanup skips pods labeled managed-by=ai-gateway-controller.
   echo "Stamping ${AIGC_MANAGED_BY_LABEL} on praxis payload-processing workloads ..."
+  _label_praxis_writer_pods_managed_by
   _trigger_aigc_praxis_reconcile
 
   local name deadline template_mb
@@ -367,11 +397,11 @@ _wait_for_default_maastenantconfig_ready() {
     message="$(oc get maastenantconfig "${DEFAULT_TENANT_CONFIG_NAME}" -n "${MAAS_SUBSCRIPTION_NAMESPACE}" \
       -o jsonpath='{.status.conditions[?(@.type=="Ready")].message}' 2>/dev/null || echo "")"
     echo "  Waiting... Ready=${ready:-Unknown} reason=${reason:-n/a} message=${message:-n/a}"
-    if [[ "${message}" == *"IPP writer pod"* ]]; then
-      echo "  Re-labeling praxis writer pods and nudging MaasTenantConfig reconcile ..."
+    if [[ "${message}" == *"IPP writer pod"* || "${message}" == *"IPP writer "* ]]; then
+      echo "  Re-labeling praxis writer pods and restarting maas-controller ..."
       _label_praxis_writer_pods_managed_by
-      oc annotate maastenantconfig "${DEFAULT_TENANT_CONFIG_NAME}" -n "${MAAS_SUBSCRIPTION_NAMESPACE}" \
-        "reconcile-trigger=$(date +%s)" --overwrite 2>/dev/null || true
+      _verify_praxis_writer_pods_excluded || true
+      _nudge_maas_tenant_config_reconcile
     fi
     sleep 5
   done
@@ -428,10 +458,17 @@ _apply_ai_gateway_controller
 
 if [[ "${REMOVE_MAAS_IPP}" == "true" ]]; then
   _wait_for_aigc_praxis_reconcile
+  # Pause immediately after aigc engages; maas-controller SkipIPP cleanup fails on
+  # unlabeled praxis writer pods as soon as they appear.
+  echo "Pausing maas-controller before praxis-extproc becomes ready ..."
+  _pause_maas_controller
   _remove_stale_payload_processing_before_wait
   _wait_for_praxis_extproc
-  _protect_praxis_from_maas_reconcile
   _stamp_praxis_pods_managed_by
+  _protect_praxis_from_maas_reconcile
+  echo "Resuming maas-controller after praxis writer pods are labeled ..."
+  _resume_maas_controller
+  _nudge_maas_tenant_config_reconcile
   _wait_for_default_maastenantconfig_ready
 fi
 
