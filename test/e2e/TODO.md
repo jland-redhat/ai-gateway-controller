@@ -2,7 +2,7 @@
 
 Tests and deploy tooling come from [models-as-a-service](https://github.com/opendatahub-io/models-as-a-service) at runtime (`test/e2e/scripts/fetch-maas-e2e.sh`).
 
-**Pin policy:** `test/maas-e2e.lock` holds a fixed commit SHA (currently `5ece7d3` on `opendatahub-io/models-as-a-service` `main`, [PR #1493](https://github.com/opendatahub-io/models-as-a-service/pull/1493)). Prow/CI always fetch that SHA; they do **not** track rolling `main`. Bump the lock only after e2e passes on a newer MaaS revision.
+**Pin policy:** `test/maas-e2e.lock` holds a fixed commit SHA (currently `3255890` on branch `fix/praxis-ipp-writer-pod-skip`, [PR #1505](https://github.com/opendatahub-io/models-as-a-service/pull/1505)). Prow/CI always fetch that SHA; they do **not** track rolling `main`. Bump the lock only after e2e passes on a newer MaaS revision.
 
 **Repo:** `fetch-maas-e2e.sh` reads `maas_repo` from the lock file (default `opendatahub-io/models-as-a-service`).
 
@@ -42,13 +42,13 @@ Some e2e fixes from the vendored branch (`ci/maas-e2e-konflux-group-test`) are *
 | **Upstream MaaS PR** (preferred) | Fix belongs in shared MaaS tests (praxis log skip, `_poll_status` flakes, duplicate-header warmup) | All MaaS consumers benefit; slower until merged |
 | **aigc post-fetch patch** (`patch-maas-tests-for-aigc.sh`, not added yet) | Short-term CI unblock while upstream PR is open | Duplicated logic; must re-apply after every lock bump |
 
-**Current choice:** upstream `main` @ `5ece7d3` includes praxis log-skip and poll flake fixes (#1493). Deploy patches stay in `patch-maas-deploy-for-aigc.sh`.
+**Current choice (branch `ci/e2e-maas-pr-1505`):** MaaS @ `3255890` (#1505 IPP migration fix on top of `main` @ `5ece7d3` / #1493). Deploy patches stay in `patch-maas-deploy-for-aigc.sh`. IPP migration **workarounds removed** from aigc — validated against maas-controller fix upstream.
 
 ---
 
 ## Upstream MaaS changes needed (or carry aigc patches)
 
-Some fixes landed in upstream MaaS `main` @ `5ece7d3` (#1493); others still need `patch-maas-deploy-for-aigc.sh` / aigc-only scripts.
+Some fixes landed in upstream MaaS `main` @ `5ece7d3` (#1493); IPP migration cleanup is on #1505 (`3255890`). Others still need `patch-maas-deploy-for-aigc.sh` / aigc-only scripts.
 
 | Area | Issue | Fix (upstream or aigc) |
 |------|--------|-------------------------|
@@ -62,7 +62,7 @@ Some fixes landed in upstream MaaS `main` @ `5ece7d3` (#1493); others still need
 | **`prow_run_*` prerequisites** | Empty `PRAXIS_EXTPROC_IMAGE` + `set -e` silent exit | **aigc-only** in `prow_run_ai_gateway_controller_test.sh` |
 | **Must-gather** | CI artifacts for HTTPRoute/LLMIS debugging | **aigc:** `collect-maas-must-gather.sh` dumps all `maas.opendatahub.io` + `inference.opendatahub.io` kinds, Gateway API HTTPRoutes/Gateways (cluster + per-namespace), Kuadrant policies, Istio gateway networking; Tekton step writes `gather-maas/` + `gather-openshift/` |
 | **Webhook handoff** | Pausing `maas-controller` breaks AITenant webhook during praxis install | **aigc-only** in `deploy-ai-gateway-controller.sh` (annotate → pause → delete IPP → **resume** → apply aigc) |
-| **IPP migration cleanup** | `MaasTenantConfig` stuck: maas-controller `ensureIPPWritersStopped` lists pods by `maas.opendatahub.io/tenant-instance` and fails unless live pods have `app.kubernetes.io/managed-by=ai-gateway-controller` | **Workaround (enabled):** pause maas-controller before praxis pods land; label running pods; resume + restart maas-controller; `stampAIGCManagedByOnDeployment` in `rename.go`. Remove once maas-controller skips pod checks for praxis-owned Deployments. |
+| **IPP migration cleanup** | `MaasTenantConfig` stuck when `ensureIPPWritersStopped` treats praxis writer pods as legacy IPP | **Upstream (#1505):** skip pod checks when writer Deployment exists and is not MaaS-owned. aigc workarounds removed on `ci/e2e-maas-pr-1505`. |
 
 ---
 
