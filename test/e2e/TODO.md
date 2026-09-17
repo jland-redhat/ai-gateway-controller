@@ -2,9 +2,9 @@
 
 Tests and deploy tooling come from [models-as-a-service](https://github.com/opendatahub-io/models-as-a-service) at runtime (`test/e2e/scripts/fetch-maas-e2e.sh`).
 
-**Pin policy:** `test/maas-e2e.lock` holds a fixed commit SHA (currently `630e7b5` on `jland-redhat/models-as-a-service` branch `aigc-e2e-praxis-and-poll-fixes`). Prow/CI always fetch that SHA; they do **not** track rolling `main`. Bump the lock only after e2e passes on a newer MaaS revision.
+**Pin policy:** `test/maas-e2e.lock` holds a fixed commit SHA (currently `5ece7d3` on `opendatahub-io/models-as-a-service` `main`, [PR #1493](https://github.com/opendatahub-io/models-as-a-service/pull/1493)). Prow/CI always fetch that SHA; they do **not** track rolling `main`. Bump the lock only after e2e passes on a newer MaaS revision.
 
-**Fork pin (temporary):** `fetch-maas-e2e.sh` defaults to `jland-redhat/models-as-a-service` until [upstream MaaS PR](https://github.com/opendatahub-io/models-as-a-service/compare/main...jland-redhat:aigc-e2e-praxis-and-poll-fixes) merges praxis log-skip and poll flake fixes. Then revert `MAAS_REPO` default and lock `maas_repo` to `opendatahub-io`.
+**Repo:** `fetch-maas-e2e.sh` reads `maas_repo` from the lock file (default `opendatahub-io/models-as-a-service`).
 
 ```bash
 # Bump pin to latest main (updates test/maas-e2e.lock after fetch):
@@ -42,20 +42,20 @@ Some e2e fixes from the vendored branch (`ci/maas-e2e-konflux-group-test`) are *
 | **Upstream MaaS PR** (preferred) | Fix belongs in shared MaaS tests (praxis log skip, `_poll_status` flakes, duplicate-header warmup) | All MaaS consumers benefit; slower until merged |
 | **aigc post-fetch patch** (`patch-maas-tests-for-aigc.sh`, not added yet) | Short-term CI unblock while upstream PR is open | Duplicated logic; must re-apply after every lock bump |
 
-**Current choice:** upstream-first — MaaS PR open for praxis/`_poll_status`/duplicate-header rows; fork pin `630e7b5` until merge. Deploy patches stay in `patch-maas-deploy-for-aigc.sh`.
+**Current choice:** upstream `main` @ `5ece7d3` includes praxis log-skip and poll flake fixes (#1493). Deploy patches stay in `patch-maas-deploy-for-aigc.sh`.
 
 ---
 
 ## Upstream MaaS changes needed (or carry aigc patches)
 
-These were fixed in the **vendored** branch (`ci/maas-e2e-konflux-group-test`) and are **not** in upstream MaaS `main` yet. Merge upstream or keep `patch-maas-deploy-for-aigc.sh` / aigc-only scripts.
+Some fixes landed in upstream MaaS `main` @ `5ece7d3` (#1493); others still need `patch-maas-deploy-for-aigc.sh` / aigc-only scripts.
 
 | Area | Issue | Fix (upstream or aigc) |
 |------|--------|-------------------------|
-| **Praxis default dataplane** | `test_per_tenant_ipp_isolation` expects Go IPP log markers (`handlers/server.go`, `x-request-id`) | Upstream: skip log check when deployment is `odh-praxis-extproc` (Rust quiet at INFO); rely on HTTP 200 |
+| **Praxis default dataplane** | `test_per_tenant_ipp_isolation` expects Go IPP log markers (`handlers/server.go`, `x-request-id`) | **Upstream (#1493):** skip log check when deployment is `odh-praxis-extproc`; rely on HTTP 200 |
 | **Praxis image / BBR** | Default tenant uses praxis; needs `llmisvc_model_provider_resolver` (praxis-proxy/ai#699) | `odh-praxis-extproc:odh-stable` since [praxis-extproc#79](https://github.com/opendatahub-io/praxis-extproc/pull/79) (`9872fc9`) |
-| **`_poll_status`** | Parallel workers churn `maas-gateway-auth` → empty 401/403 flakes | Upstream: re-check gateway AuthPolicy on transient empty 401/403 during poll |
-| **Duplicate subscription headers** | `test_duplicate_subscription_headers_ignored` warmup 403 under load | Upstream: 8s post-mint delay + 90s warmup poll (see `test_negative_security.py`) |
+| **`_poll_status`** | Parallel workers churn `maas-gateway-auth` → empty 401/403 flakes | **Upstream (#1493):** re-check gateway AuthPolicy on transient empty 401/403 during poll |
+| **Duplicate subscription headers** | `test_duplicate_subscription_headers_ignored` warmup 403 under load | **Upstream (#1493):** post-mint delay + warmup poll hardening |
 | **`deploy.sh`** | Kustomize e2e has no `maas-controller/` source tree | **aigc:** `patch-maas-deploy-for-aigc.sh` after fetch (keep until upstream accepts `deployment/` only) |
 | **`deploy-models.sh`** | Waits for all Kuadrant AuthPolicies (flakes when aigc adds policies) | **aigc:** patch scopes wait to `managed-by=maas-controller` label |
 | **`validate-deployment.sh`** | BBR model URL is gateway-root; path-based HTTPRoute needs path prefix | Upstream/prow: path-based inference URL when `/v1/models` returns host-only URL |

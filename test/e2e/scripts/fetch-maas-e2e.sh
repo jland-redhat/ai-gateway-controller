@@ -16,21 +16,25 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="${PROJECT_ROOT:-$(cd "${SCRIPT_DIR}/../../.." && pwd)}"
 
-# Until opendatahub-io/models-as-a-service merges aigc e2e fixes, fetch from fork.
-# TODO: revert default to https://github.com/opendatahub-io/models-as-a-service after merge.
-MAAS_REPO="${MAAS_REPO:-https://github.com/jland-redhat/models-as-a-service}"
 MAAS_REF="${MAAS_REF:-main}"
 MAAS_CHECKOUT_ROOT="${MAAS_CHECKOUT_ROOT:-${PROJECT_ROOT}/test/maas-e2e}"
 LOCK_FILE="${MAAS_LOCK_FILE:-${PROJECT_ROOT}/test/maas-e2e.lock}"
 MAAS_UPDATE_LOCK="${MAAS_UPDATE_LOCK:-false}"
 
-_read_lock_commit() {
+_read_lock_value() {
+  local key="$1"
   [[ -f "${LOCK_FILE}" ]] || return 1
   local line
-  line="$(grep -E '^maas_commit=' "${LOCK_FILE}" | tail -1 || true)"
+  line="$(grep -E "^${key}=" "${LOCK_FILE}" | tail -1 || true)"
   [[ -n "${line}" ]] || return 1
-  printf '%s\n' "${line#maas_commit=}"
+  printf '%s\n' "${line#${key}=}"
 }
+
+_read_lock_commit() {
+  _read_lock_value maas_commit
+}
+
+MAAS_REPO="${MAAS_REPO:-$(_read_lock_value maas_repo 2>/dev/null || echo https://github.com/opendatahub-io/models-as-a-service)}"
 
 _resolve_fetch_ref() {
   if [[ -n "${MAAS_COMMIT:-}" ]]; then
