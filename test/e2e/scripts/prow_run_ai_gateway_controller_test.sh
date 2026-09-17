@@ -120,6 +120,29 @@ check_prerequisites() {
     echo "PRAXIS_EXTPROC_IMAGE: ${PRAXIS_EXTPROC_IMAGE}"
 }
 
+ensure_gateway_allows_model_namespace() {
+    local model_ns="${MODEL_NAMESPACE:-llm}"
+    local helpers="${MAAS_CHECKOUT_ROOT:-}/scripts/deployment-helpers.sh"
+    [[ -f "$helpers" ]] || {
+        echo "WARN: ${helpers} not found; skipping gateway allowedRoutes patch"
+        return 0
+    }
+    # shellcheck disable=SC1091
+    source "$helpers"
+    local infra_ns
+    infra_ns="$(derive_infra_namespace "${DEPLOYMENT_NAMESPACE:-opendatahub}")"
+    local current
+    current="$(oc get gateway "${GATEWAY_NAME}" -n "${GATEWAY_NAMESPACE}" \
+        -o jsonpath='{.spec.listeners[0].allowedRoutes.namespaces.selector.matchExpressions[0].values}' 2>/dev/null || true)"
+    if [[ "$current" == *"${model_ns}"* ]]; then
+        echo "Gateway ${GATEWAY_NAMESPACE}/${GATEWAY_NAME} already allows HTTPRoutes from ${model_ns}"
+        return 0
+    fi
+    echo "Patching gateway allowedRoutes to include ${model_ns} (was: ${current:-<unset>}) ..."
+    ALLOWED_ROUTE_NAMESPACES="${DEPLOYMENT_NAMESPACE:-opendatahub},${infra_ns},${model_ns}" \
+        patch_gateway_allowed_routes "${GATEWAY_NAME}" "${GATEWAY_NAMESPACE}"
+}
+
 enable_tenant_namespace_discovery_for_e2e() {
     [[ "${ENABLE_TENANT_NAMESPACE_DISCOVERY}" == "true" ]] || return 0
 
@@ -174,7 +197,10 @@ setup_vars_for_tests() {
 validate_deployment() {
     echo "Deployment Validation"
     if [[ "$SKIP_VALIDATION" == "false" ]]; then
+        local scheme="https"
+        [[ "$INSECURE_HTTP" == "true" ]] && scheme="http"
         if ! E2E_MODEL_PATH="$E2E_MODEL_PATH" E2E_MODEL_REF="$E2E_MODEL_REF" \
+            MAAS_GATEWAY_HOST="${scheme}://${HOST}" \
             "${MAAS_CHECKOUT_ROOT}/scripts/validate-deployment.sh"; then
             echo "First validation failed; retrying after short wait..."
             wait_for_gateway_programmed "$GATEWAY_NAME" "$GATEWAY_NAMESPACE" 60 || true
@@ -185,6 +211,7 @@ validate_deployment() {
                     "deployment/maas-api" -n "$MAAS_API_DEPLOYMENT_NAMESPACE" 2>/dev/null || true
             fi
             if ! E2E_MODEL_PATH="$E2E_MODEL_PATH" E2E_MODEL_REF="$E2E_MODEL_REF" \
+            MAAS_GATEWAY_HOST="${scheme}://${HOST}" \
             "${MAAS_CHECKOUT_ROOT}/scripts/validate-deployment.sh"; then
                 echo "ERROR: Deployment validation failed after retry"
                 exit 1
@@ -303,6 +330,9 @@ setup_vars_for_tests
 
 print_header "Setting up test tokens"
 _source_maas_e2e_script "${MAAS_E2E_DIR}/scripts/setup-test-tokens.sh"
+
+print_header "Ensuring gateway allows model HTTPRoutes"
+ensure_gateway_allows_model_namespace || exit 1
 
 print_header "Validating Deployment"
 phase_mark validate start

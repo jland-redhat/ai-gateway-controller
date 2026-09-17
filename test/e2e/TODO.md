@@ -58,7 +58,7 @@ Some fixes landed in upstream MaaS `main` @ `5ece7d3` (#1493); IPP migration cle
 | **Duplicate subscription headers** | `test_duplicate_subscription_headers_ignored` warmup 403 under load | **Upstream (#1493):** post-mint delay + warmup poll hardening |
 | **`deploy.sh`** | Kustomize e2e has no `maas-controller/` source tree | **aigc:** `patch-maas-deploy-for-aigc.sh` after fetch (keep until upstream accepts `deployment/` only) |
 | **`deploy-models.sh`** | Waits for all Kuadrant AuthPolicies (flakes when aigc adds policies) | **aigc:** patch scopes wait to `managed-by=maas-controller` label |
-| **`validate-deployment.sh`** | BBR model URL is gateway-root; path-based HTTPRoute needs path prefix | Upstream/prow: path-based inference URL when `/v1/models` returns host-only URL |
+| **`validate-deployment.sh`** | BBR model URL is gateway-root; path-based HTTPRoute needs path prefix | **Upstream (maas-billing):** `E2E_MODEL_PATH` / `E2E_MODEL_REF` in `validate-deployment.sh`; **aigc:** `ensure_gateway_allows_model_namespace` in prow runner |
 | **`prow_run_*` prerequisites** | Empty `PRAXIS_EXTPROC_IMAGE` + `set -e` silent exit | **aigc-only** in `prow_run_ai_gateway_controller_test.sh` |
 | **Must-gather** | CI artifacts for HTTPRoute/LLMIS debugging | **aigc:** `collect-maas-must-gather.sh` dumps all `maas.opendatahub.io` + `inference.opendatahub.io` kinds, Gateway API HTTPRoutes/Gateways (cluster + per-namespace), Kuadrant policies, Istio gateway networking; Tekton step writes `gather-maas/` + `gather-openshift/` |
 | **Webhook handoff** | Pausing `maas-controller` breaks AITenant webhook during praxis install | **aigc-only** in `deploy-ai-gateway-controller.sh` (annotate → pause → delete IPP → **resume** → apply aigc) |
