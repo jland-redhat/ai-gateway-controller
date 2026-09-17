@@ -53,7 +53,7 @@ Some fixes landed in upstream MaaS `main` @ `5ece7d3` (#1493); others still need
 | Area | Issue | Fix (upstream or aigc) |
 |------|--------|-------------------------|
 | **Praxis default dataplane** | `test_per_tenant_ipp_isolation` expects Go IPP log markers (`handlers/server.go`, `x-request-id`) | **Upstream (#1493):** skip log check when deployment is `odh-praxis-extproc`; rely on HTTP 200 |
-| **Praxis image / BBR** | Default tenant uses praxis; needs `llmisvc_model_provider_resolver` (praxis-proxy/ai#699) | `odh-praxis-extproc:odh-stable` since [praxis-extproc#79](https://github.com/opendatahub-io/praxis-extproc/pull/79) (`9872fc9`) |
+| **Praxis image / BBR** | Default tenant uses praxis; BBR needs `model_to_header` + `llmisvc_model_provider_resolver` on **pre-extproc** chain | Manifest: [praxis-extproc#82](https://github.com/opendatahub-io/praxis-extproc/pull/82) @ `d030ea0`; image: `odh-praxis-extproc:odh-stable` ([#79](https://github.com/opendatahub-io/praxis-extproc/pull/79)) |
 | **`_poll_status`** | Parallel workers churn `maas-gateway-auth` → empty 401/403 flakes | **Upstream (#1493):** re-check gateway AuthPolicy on transient empty 401/403 during poll |
 | **Duplicate subscription headers** | `test_duplicate_subscription_headers_ignored` warmup 403 under load | **Upstream (#1493):** post-mint delay + warmup poll hardening |
 | **`deploy.sh`** | Kustomize e2e has no `maas-controller/` source tree | **aigc:** `patch-maas-deploy-for-aigc.sh` after fetch (keep until upstream accepts `deployment/` only) |
