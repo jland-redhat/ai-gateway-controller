@@ -109,6 +109,164 @@ _save_pod_logs_grep() {
   } >"$outfile"
 }
 
+_resource_short_name() {
+  local resource="$1"
+  echo "${resource%%.*}"
+}
+
+_resource_is_namespaced() {
+  local resource="$1"
+  local short
+  short="$(_resource_short_name "$resource")"
+  local namespaced
+  namespaced="$(_k api-resources --no-headers -o wide 2>/dev/null | awk -v r="$short" '$1==r {print $3; exit}')"
+  [[ "${namespaced}" == "true" ]]
+}
+
+_resolve_cluster_resource() {
+  local want="$1"
+  shift
+  local candidate
+  for candidate in "$@"; do
+    if _k api-resources -o name 2>/dev/null | grep -qx "$candidate"; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+_collect_api_group_resources() {
+  local group="$1"
+  local outdir="$2"
+  mkdir -p "$_dest/$outdir"
+  local resource safe
+  while IFS= read -r resource; do
+    [[ -z "${resource}" ]] && continue
+    safe="${resource//./-}"
+    if _resource_is_namespaced "$resource"; then
+      _save_yaml "$_dest/$outdir/${safe}-all.yaml" "$resource" -A
+    else
+      _save_yaml "$_dest/$outdir/${safe}-all.yaml" "$resource"
+    fi
+  done < <(_k api-resources --api-group="$group" -o name 2>/dev/null || true)
+}
+
+_collect_gateway_api() {
+  mkdir -p "$_dest/gateway-api"
+  _collect_api_group_resources "gateway.networking.k8s.io" "gateway-api"
+
+  local httproute_resource
+  httproute_resource="$(_resolve_cluster_resource httproute \
+    httproutes.gateway.networking.k8s.io \
+    httproute.gateway.networking.k8s.io \
+    httproutes \
+    httproute || true)"
+  if [[ -n "${httproute_resource}" ]]; then
+    _save_yaml "$_dest/gateway-api/httproutes-cluster-all.yaml" "${httproute_resource}" -A
+    _save_text "$_dest/gateway-api/httproutes-wide.txt" "HTTPRoutes (all namespaces)" bash -c "
+      _k get '${httproute_resource}' -A -o wide 2>/dev/null || true
+      echo ''
+      _k get '${httproute_resource}' -A -o custom-columns=\
+NS:.metadata.namespace,NAME:.metadata.name,HOSTS:.spec.hostnames,GW:.spec.parentRefs[*].name,AGE:.metadata.creationTimestamp \
+        2>/dev/null || true
+    "
+    local ns
+    for ns in \
+      "$GATEWAY_NAMESPACE" \
+      "$MAAS_SUBSCRIPTION_NAMESPACE" \
+      "$MAAS_API_DEPLOYMENT_NAMESPACE" \
+      "$AITENANT_NAMESPACE" \
+      "$LLM_NAMESPACE" \
+      "$DEPLOYMENT_NAMESPACE"; do
+      if _k get namespace "$ns" &>/dev/null; then
+        _save_yaml "$_dest/gateway-api/httproutes-${ns}.yaml" "${httproute_resource}" -n "$ns"
+        _save_text "$_dest/gateway-api/httproutes-${ns}.txt" "HTTPRoutes in ${ns}" \
+          _k get "${httproute_resource}" -n "$ns" -o wide
+      fi
+    done
+  else
+    _save_text "$_dest/gateway-api/httproutes-wide.txt" "HTTPRoutes (resource not found)" \
+      bash -c '_k api-resources 2>/dev/null | grep -i httproute || echo "no httproute API resource"'
+  fi
+
+  local gw_resource
+  gw_resource="$(_resolve_cluster_resource gateway \
+    gateways.gateway.networking.k8s.io \
+    gateway.gateway.networking.k8s.io \
+    gateways \
+    gateway || true)"
+  if [[ -n "${gw_resource}" ]]; then
+    _save_yaml "$_dest/gateway-api/gateways-cluster-all.yaml" "${gw_resource}" -A
+    _save_text "$_dest/gateway-api/gateways-wide.txt" "Gateways (all namespaces)" \
+      _k get "${gw_resource}" -A -o wide
+    if _k get namespace "$GATEWAY_NAMESPACE" &>/dev/null; then
+      _save_yaml "$_dest/gateway-api/gateways-${GATEWAY_NAMESPACE}.yaml" "${gw_resource}" -n "$GATEWAY_NAMESPACE"
+    fi
+  fi
+
+  local refgrant_resource
+  refgrant_resource="$(_resolve_cluster_resource referencegrant \
+    referencegrants.gateway.networking.k8s.io \
+    referencegrant.gateway.networking.k8s.io \
+    referencegrants \
+    referencegrant || true)"
+  if [[ -n "${refgrant_resource}" ]]; then
+    _save_yaml "$_dest/gateway-api/referencegrants-cluster-all.yaml" "${refgrant_resource}" -A
+  fi
+}
+
+_collect_kuadrant_policies() {
+  mkdir -p "$_dest/kuadrant"
+  local resource
+  for resource in \
+    authpolicies.kuadrant.io \
+    tokenratelimitpolicies.kuadrant.io; do
+    if _k api-resources -o name 2>/dev/null | grep -qx "$resource"; then
+      _save_yaml "$_dest/kuadrant/${resource//./-}-all.yaml" "$resource" -A
+      _save_text "$_dest/kuadrant/${resource//./-}-wide.txt" "$resource (all namespaces)" \
+        _k get "$resource" -A -o wide
+    fi
+  done
+}
+
+_collect_istio_gateway_networking() {
+  mkdir -p "$_dest/istio-gateway"
+  for resource in \
+    envoyfilters.networking.istio.io \
+    destinationrules.networking.istio.io \
+    serviceentries.networking.istio.io \
+    virtualservices.networking.istio.io; do
+    if _k api-resources -o name 2>/dev/null | grep -qx "$resource"; then
+      _save_yaml "$_dest/istio-gateway/${resource//./-}-${GATEWAY_NAMESPACE}.yaml" \
+        "$resource" -n "$GATEWAY_NAMESPACE"
+    fi
+  done
+}
+
+_collect_maas_inventory() {
+  _save_text "$_dest/summaries/maas-resources-wide.txt" "MaaS / inference CR inventory" bash -c "
+    for kind in \
+      maastenantconfig \
+      aitenant \
+      tenant \
+      maassubscription \
+      maasauthpolicy \
+      maasmodelref \
+      externalmodel \
+      config.maas.opendatahub.io; do
+      echo \"--- \${kind} ---\"
+      _k get \"\${kind}\" -A -o wide 2>/dev/null || _k get \"\${kind}\" -o wide 2>/dev/null || echo '  (not found)'
+      echo ''
+    done
+    for kind in externalmodels externalproviders; do
+      echo \"--- inference.\${kind} ---\"
+      _k get \"\${kind}.inference.opendatahub.io\" -A -o wide 2>/dev/null || echo '  (not found)'
+      echo ''
+    done
+  "
+}
+
 _log "=== MaaS must-gather started at $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
 _log "dest=${_dest}"
 _log "DEPLOYMENT_NAMESPACE=${DEPLOYMENT_NAMESPACE}"
@@ -129,6 +287,12 @@ Key files for tenant-not-ready failures:
   crs/aitenant-models-as-a-service.yaml
   crs/config-default.yaml
   summaries/tenant-readiness.txt
+  summaries/maas-resources-wide.txt
+  gateway-api/httproutes-wide.txt
+  gateway-api/httproutes-cluster-all.yaml
+  gateway-api/httproutes-${GATEWAY_NAMESPACE}.yaml
+  crs/maas/*-all.yaml (every maas.opendatahub.io kind)
+  crs/inference/*-all.yaml (inference.opendatahub.io ExternalModel/Provider)
   logs/maas-controller-tenant.log
   workloads/payload-processing-openshift-ingress.yaml
   namespaces/events-${MAAS_SUBSCRIPTION_NAMESPACE}.txt
@@ -160,19 +324,19 @@ _save_yaml "$_dest/crs/aitenant-models-as-a-service.yaml" \
   aitenant "${DEFAULT_AITENANT_NAME}" -n "$AITENANT_NAMESPACE"
 _save_yaml "$_dest/crs/config-default.yaml" config.maas.opendatahub.io default
 
+# Discover and dump every maas.opendatahub.io + inference.opendatahub.io kind (cluster-wide).
+_collect_api_group_resources "maas.opendatahub.io" "crs/maas"
+_collect_api_group_resources "inference.opendatahub.io" "crs/inference"
+_collect_maas_inventory
+
+# Gateway API HTTPRoutes/Gateways (oc adm must-gather omits these).
+_collect_gateway_api
+_collect_kuadrant_policies
+_collect_istio_gateway_networking
+
 for cr in \
-  "maastenantconfigs.maas.opendatahub.io:-A" \
-  "aitenants.maas.opendatahub.io:-A" \
-  "tenants.maas.opendatahub.io:-A" \
-  "maassubscriptions.maas.opendatahub.io:-n ${MAAS_SUBSCRIPTION_NAMESPACE}" \
-  "maasauthpolicies.maas.opendatahub.io:-n ${MAAS_SUBSCRIPTION_NAMESPACE}" \
-  "maasmodelrefs.maas.opendatahub.io:-A" \
-  "configs.maas.opendatahub.io:" \
   "llminferenceservices.serving.kserve.io:-A" \
-  "aigateways.components.platform.opendatahub.io:" \
-  "httproutes.gateway.networking.k8s.io:-A" \
-  "gateways.gateway.networking.k8s.io:-A" \
-  "envoyfilters.networking.istio.io:-n ${GATEWAY_NAMESPACE}"; do
+  "aigateways.components.platform.opendatahub.io:-A"; do
   kind="${cr%%:*}"
   args="${cr#*:}"
   # shellcheck disable=SC2086
@@ -216,6 +380,15 @@ while IFS= read -r ns_line; do
     maassubscriptions.maas.opendatahub.io -n "$ns"
   _save_yaml "$_dest/worker-tenants/${ns}-maastenantconfig.yaml" \
     maastenantconfig -n "$ns" 2>/dev/null || true
+  _save_yaml "$_dest/worker-tenants/${ns}-maasauthpolicies.yaml" \
+    maasauthpolicies.maas.opendatahub.io -n "$ns" 2>/dev/null || true
+  _save_yaml "$_dest/worker-tenants/${ns}-maasmodelrefs.yaml" \
+    maasmodelrefs.maas.opendatahub.io -n "$ns" 2>/dev/null || true
+  httproute_resource="$(_resolve_cluster_resource httproute \
+    httproutes.gateway.networking.k8s.io httproute.gateway.networking.k8s.io httproutes httproute || true)"
+  if [[ -n "${httproute_resource}" ]]; then
+    _save_yaml "$_dest/worker-tenants/${ns}-httproutes.yaml" "${httproute_resource}" -n "$ns"
+  fi
   _save_events "$ns"
 done < <(_k get ns -o name 2>/dev/null | grep -E 'e2e-models-e2e-worker|e2e-worker' || true)
 
