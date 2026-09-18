@@ -38,6 +38,9 @@ PRAXIS_INSTALL_TIMEOUT="${PRAXIS_INSTALL_TIMEOUT:-300}"
 MANAGED_FALSE_ANNOTATION="${MANAGED_FALSE_ANNOTATION:-opendatahub.io/managed=false}"
 AITENANT_NAME="${AITENANT_NAME:-models-as-a-service}"
 AITENANT_NAMESPACE="${AITENANT_NAMESPACE:-ai-tenants}"
+# Praxis opt-in and PraxisCleanupFinalizer live on MaasTenantConfig, not AITenant.
+MAAS_TENANT_CONFIG_NAME="${MAAS_TENANT_CONFIG_NAME:-default-tenant}"
+MAAS_SUBSCRIPTION_NAMESPACE="${MAAS_SUBSCRIPTION_NAMESPACE:-models-as-a-service}"
 
 _default_praxis_image() {
   local params="${PROJECT_ROOT}/config/self/default/params.env"
@@ -121,15 +124,26 @@ _resume_maas_controller() {
   MAAS_CONTROLLER_PAUSED=false
 }
 
-# ai-gateway-controller patches AITenant (finalizer) through maas-controller's
-# validating webhook. Bring maas-controller back after the legacy IPP delete;
-# with payload-processing-type=praxis, maas-controller does not recreate IPP.
+# PraxisCleanupFinalizer is written on MaasTenantConfig. Keep maas-controller
+# running so its webhook can admit that update and so it can finish legacy IPP
+# cleanup (payload-processing-status=cleanup-complete) before aigc deploys.
 _resume_maas_controller_for_aitenant_webhook() {
   if [[ "${MAAS_CONTROLLER_PAUSED:-}" != "true" ]]; then
     return 0
   fi
-  echo "Resuming maas-controller so ai-gateway-controller can reconcile AITenant (webhook) ..."
+  echo "Resuming maas-controller so the MaasTenantConfig webhook stays available ..."
   _resume_maas_controller
+}
+
+_tenant_config_namespace() {
+  local ns
+  ns="$(oc get aitenant "${AITENANT_NAME}" -n "${AITENANT_NAMESPACE}" \
+    -o jsonpath='{.status.tenantNamespace}' 2>/dev/null || true)"
+  if [[ -n "${ns}" ]]; then
+    printf '%s\n' "${ns}"
+  else
+    printf '%s\n' "${MAAS_SUBSCRIPTION_NAMESPACE}"
+  fi
 }
 
 _delete_legacy_ipp_in_gateway_namespace() {
@@ -194,17 +208,22 @@ _apply_ai_gateway_controller() {
 }
 
 _wait_for_aigc_praxis_reconcile() {
-  echo "Waiting for ai-gateway-controller to attach praxis finalizer on ${AITENANT_NAMESPACE}/${AITENANT_NAME} ..."
+  local ns
+  ns="$(_tenant_config_namespace)"
+  echo "Waiting for ai-gateway-controller to attach praxis finalizer on MaasTenantConfig ${ns}/${MAAS_TENANT_CONFIG_NAME} ..."
   local deadline=$((SECONDS + 120))
   while [[ $SECONDS -lt $deadline ]]; do
-    if oc get aitenant "${AITENANT_NAME}" -n "${AITENANT_NAMESPACE}" \
+    if oc get maastenantconfig "${MAAS_TENANT_CONFIG_NAME}" -n "${ns}" \
       -o jsonpath='{.metadata.finalizers}' 2>/dev/null | grep -q 'ai-gateway-controller.opendatahub.io/praxis-cleanup'; then
-      echo "ai-gateway-controller praxis reconcile started (finalizer present)"
+      echo "ai-gateway-controller praxis reconcile started (finalizer present on MaasTenantConfig)"
       return 0
     fi
     sleep 3
   done
-  echo "WARN: praxis finalizer not observed on AITenant within 120s; continuing praxis wait anyway" >&2
+  echo "WARN: praxis finalizer not observed on MaasTenantConfig ${ns}/${MAAS_TENANT_CONFIG_NAME} within 120s; continuing praxis wait anyway" >&2
+  oc get maastenantconfig "${MAAS_TENANT_CONFIG_NAME}" -n "${ns}" \
+    -o jsonpath='type={.metadata.annotations.maas\.opendatahub\.io/payload-processing-type} status={.metadata.annotations.maas\.opendatahub\.io/payload-processing-status}{"\n"}' \
+    2>/dev/null || true
 }
 
 _remove_stale_payload_processing_before_wait() {
@@ -222,7 +241,9 @@ _remove_stale_payload_processing_before_wait() {
   fi
   echo "Removing stale payload-processing (image=${image:-<none>}) before praxis install ..."
   _delete_legacy_ipp_in_gateway_namespace
-  oc annotate aitenant "${AITENANT_NAME}" -n "${AITENANT_NAMESPACE}" \
+  local ns
+  ns="$(_tenant_config_namespace)"
+  oc annotate maastenantconfig "${MAAS_TENANT_CONFIG_NAME}" -n "${ns}" \
     "reconcile-trigger=$(date +%s)" --overwrite 2>/dev/null || true
 }
 
@@ -232,7 +253,12 @@ _wait_for_praxis_extproc() {
   while [[ $SECONDS -lt $deadline ]]; do
     local image args ready
     if ! oc get deployment payload-processing -n "${GATEWAY_NAMESPACE}" &>/dev/null; then
-      echo "  Waiting... deployment/payload-processing not created yet"
+      local ns status
+      ns="$(_tenant_config_namespace)"
+      status="$(oc get maastenantconfig "${MAAS_TENANT_CONFIG_NAME}" -n "${ns}" \
+        -o jsonpath='type={.metadata.annotations.maas\.opendatahub\.io/payload-processing-type} status={.metadata.annotations.maas\.opendatahub\.io/payload-processing-status}' \
+        2>/dev/null || true)"
+      echo "  Waiting... deployment/payload-processing not created yet (${status:-MaasTenantConfig unread})"
       sleep 5
       continue
     fi
@@ -265,13 +291,16 @@ _wait_for_praxis_extproc() {
   return 1
 }
 
-_enable_praxis_on_default_aitenant() {
-  if ! oc get aitenant "${AITENANT_NAME}" -n "${AITENANT_NAMESPACE}" &>/dev/null; then
-    echo "WARN: AITenant ${AITENANT_NAMESPACE}/${AITENANT_NAME} not found; skipping praxis opt-in annotation" >&2
+_enable_praxis_on_default_tenant() {
+  local ns
+  ns="$(_tenant_config_namespace)"
+  if ! oc get maastenantconfig "${MAAS_TENANT_CONFIG_NAME}" -n "${ns}" &>/dev/null; then
+    echo "WARN: MaasTenantConfig ${ns}/${MAAS_TENANT_CONFIG_NAME} not found; skipping praxis opt-in annotation" >&2
     return 0
   fi
-  echo "Opting default AITenant into praxis dataplane (maas.opendatahub.io/payload-processing-type=praxis) ..."
-  oc annotate aitenant "${AITENANT_NAME}" -n "${AITENANT_NAMESPACE}" \
+  # Annotation is only read from MaasTenantConfig. Annotating AITenant does nothing.
+  echo "Opting MaasTenantConfig ${ns}/${MAAS_TENANT_CONFIG_NAME} into praxis (maas.opendatahub.io/payload-processing-type=praxis) ..."
+  oc annotate maastenantconfig "${MAAS_TENANT_CONFIG_NAME}" -n "${ns}" \
     maas.opendatahub.io/payload-processing-type=praxis --overwrite
 }
 
@@ -311,19 +340,15 @@ echo "  namespace: ${AI_GATEWAY_CONTROLLER_NAMESPACE}"
 echo "  gateway: ${GATEWAY_NAMESPACE}/${GATEWAY_NAME}"
 echo "  remove maas IPP: ${REMOVE_MAAS_IPP}"
 
-if [[ "${REMOVE_MAAS_IPP}" == "true" ]]; then
-  # Annotate while webhook is up, pause only long enough to delete legacy IPP.
-  _enable_praxis_on_default_aitenant
-  _pause_maas_controller
-  _delete_legacy_ipp_in_gateway_namespace
-  _resume_maas_controller_for_aitenant_webhook
-fi
-
+# Apply the controller first so it is watching when the tenant opts in.
+# Do not pause maas-controller or delete IPP here: Ryan's #1508 handoff has
+# maas-controller tear down legacy IPP and write payload-processing-status=
+# cleanup-complete. aigc then claims steady and creates payload-processing.
 _apply_ai_gateway_controller
 
 if [[ "${REMOVE_MAAS_IPP}" == "true" ]]; then
+  _enable_praxis_on_default_tenant
   _wait_for_aigc_praxis_reconcile
-  _remove_stale_payload_processing_before_wait
   _wait_for_praxis_extproc
   _protect_praxis_from_maas_reconcile
 fi
