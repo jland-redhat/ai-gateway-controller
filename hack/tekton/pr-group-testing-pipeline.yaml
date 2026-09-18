@@ -233,6 +233,10 @@ spec:
                 value: /workspace/artifacts-dir
               - name: SNAPSHOT
                 value: $(tasks.generate-snapshot.results.SNAPSHOT)
+              - name: PR_NUMBER
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.labels['pipelinesascode.tekton.dev/pull-request']
             workingDir: /workspace/source
             volumeMounts:
               - name: credentials
@@ -245,16 +249,29 @@ spec:
               STATUS_FILE="/test-status/deploy-and-e2e-status"
               echo "failed" > "$STATUS_FILE"
 
-              export AI_GATEWAY_CONTROLLER_IMAGE=$(jq -r '."odh-ai-gateway-controller-ci".image' <<< "${SNAPSHOT}")
+              AIGC_DIGEST_REF=$(jq -r '."odh-ai-gateway-controller-ci".image' <<< "${SNAPSHOT}")
               AIGC_TAG=$(jq -r '."odh-ai-gateway-controller-ci".image_tag' <<< "${SNAPSHOT}")
+              AIGC_REPO="${AIGC_DIGEST_REF%%@*}"
 
-              if [ -z "${AIGC_TAG}" ] || [ "${AIGC_TAG}" = "null" ]; then
-                echo "ERROR: image_tag missing for odh-ai-gateway-controller-ci in SNAPSHOT" >&2
+              if [ -z "${AIGC_REPO}" ] || [ "${AIGC_REPO}" = "null" ]; then
+                echo "ERROR: image missing for odh-ai-gateway-controller-ci in SNAPSHOT" >&2
+                exit 1
+              fi
+
+              # Prefer the mutable odh-pr-<N> tag over the snapshot digest. Digests can lag
+              # behind the latest Konflux build for the PR and pin a stale controller image.
+              if [ -n "${PR_NUMBER}" ] && [ "${PR_NUMBER}" != "null" ]; then
+                export AI_GATEWAY_CONTROLLER_IMAGE="${AIGC_REPO}:odh-pr-${PR_NUMBER}"
+              elif [ -n "${AIGC_TAG}" ] && [ "${AIGC_TAG}" != "null" ]; then
+                export AI_GATEWAY_CONTROLLER_IMAGE="${AIGC_REPO}:${AIGC_TAG}"
+              else
+                echo "ERROR: neither PR_NUMBER nor image_tag available to resolve controller image" >&2
                 exit 1
               fi
 
               echo "AI_GATEWAY_CONTROLLER_IMAGE=${AI_GATEWAY_CONTROLLER_IMAGE}"
-              echo "AI_GATEWAY_CONTROLLER_IMAGE (tag): ${AI_GATEWAY_CONTROLLER_IMAGE%%@*}:${AIGC_TAG}"
+              echo "AI_GATEWAY_CONTROLLER_IMAGE (snapshot digest, unused): ${AIGC_DIGEST_REF}"
+              echo "AI_GATEWAY_CONTROLLER_IMAGE (snapshot tag): ${AIGC_REPO}:${AIGC_TAG}"
 
               PRAXIS_EXTPROC_STABLE_IMAGE="quay.io/opendatahub/odh-praxis-extproc:odh-stable"
               PRAXIS_FROM_SNAPSHOT=$(jq -r '."odh-praxis-extproc-ci".image // empty' <<< "${SNAPSHOT}")
