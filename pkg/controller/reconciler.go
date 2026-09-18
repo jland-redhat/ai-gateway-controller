@@ -43,9 +43,9 @@ const (
 	reasonNoRoutes              = "NoRoutes"
 	reasonProviderNotReady      = "ProviderNotReady"
 	reasonClusterAllowlist      = "ClusterAllowlistMissing"
-	providerServicePrefix  = "provider-"
-	modelRoutePrefix       = "external-model-"
-	externalModelFinalizer = "inference.opendatahub.io/external-model-cleanup"
+	providerServicePrefix       = "provider-"
+	modelRoutePrefix            = "external-model-"
+	externalModelFinalizer      = "inference.opendatahub.io/external-model-cleanup"
 )
 
 // Reconciler is the sole writer for the ExternalModel transport plane and the
