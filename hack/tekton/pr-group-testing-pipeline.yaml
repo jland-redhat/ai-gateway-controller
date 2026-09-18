@@ -180,6 +180,7 @@ spec:
         workspace: git-auth
       runAfter:
         - provision-cluster
+        - audit-snapshot
       taskSpec:
         volumes:
           - name: credentials
@@ -237,6 +238,8 @@ spec:
                 valueFrom:
                   fieldRef:
                     fieldPath: metadata.labels['pipelinesascode.tekton.dev/pull-request']
+              - name: PR_NUMBER_RESULT
+                value: $(tasks.audit-snapshot.results.pull-request-number)
             workingDir: /workspace/source
             volumeMounts:
               - name: credentials
@@ -249,6 +252,8 @@ spec:
               STATUS_FILE="/test-status/deploy-and-e2e-status"
               echo "failed" > "$STATUS_FILE"
 
+              PR_NUMBER="${PR_NUMBER:-${PR_NUMBER_RESULT:-}}"
+
               AIGC_DIGEST_REF=$(jq -r '."odh-ai-gateway-controller-ci".image' <<< "${SNAPSHOT}")
               AIGC_TAG=$(jq -r '."odh-ai-gateway-controller-ci".image_tag' <<< "${SNAPSHOT}")
               AIGC_REPO="${AIGC_DIGEST_REF%%@*}"
@@ -258,16 +263,23 @@ spec:
                 exit 1
               fi
 
-              # Prefer the mutable odh-pr-<N> tag over the snapshot digest. Digests can lag
-              # behind the latest Konflux build for the PR and pin a stale controller image.
+              # Always the floating quay tag (odh-pr-37, ...). The snapshot .image
+              # digest lags that tag; deploying it rolls out a stale controller.
               if [ -n "${PR_NUMBER}" ] && [ "${PR_NUMBER}" != "null" ]; then
                 export AI_GATEWAY_CONTROLLER_IMAGE="${AIGC_REPO}:odh-pr-${PR_NUMBER}"
-              elif [ -n "${AIGC_TAG}" ] && [ "${AIGC_TAG}" != "null" ]; then
+              elif [ -n "${AIGC_TAG}" ] && [ "${AIGC_TAG}" != "null" ] && [[ "${AIGC_TAG}" != *@sha256:* ]]; then
                 export AI_GATEWAY_CONTROLLER_IMAGE="${AIGC_REPO}:${AIGC_TAG}"
               else
-                echo "ERROR: neither PR_NUMBER nor image_tag available to resolve controller image" >&2
+                echo "ERROR: cannot resolve odh-pr tag (PR_NUMBER=${PR_NUMBER:-} image_tag=${AIGC_TAG:-})" >&2
+                echo "ERROR: refusing snapshot digest ${AIGC_DIGEST_REF}" >&2
                 exit 1
               fi
+              case "${AI_GATEWAY_CONTROLLER_IMAGE}" in
+                *@sha256:*)
+                  echo "ERROR: refusing digest image ${AI_GATEWAY_CONTROLLER_IMAGE}" >&2
+                  exit 1
+                  ;;
+              esac
 
               echo "AI_GATEWAY_CONTROLLER_IMAGE=${AI_GATEWAY_CONTROLLER_IMAGE}"
               echo "AI_GATEWAY_CONTROLLER_IMAGE (snapshot digest, unused): ${AIGC_DIGEST_REF}"
@@ -308,6 +320,8 @@ spec:
             script: |
               set -euo pipefail
               mkdir -p "${ARTIFACT_DIR}/gather-openshift" "${ARTIFACT_DIR}/gather-maas"
+              # Billing-style maas-crs/, cluster-state.log, pod-logs/ next to gather-maas/.
+              bash ./test/e2e/scripts/collect-e2e-artifacts.sh || true
               LOG="${ARTIFACT_DIR}/must-gather.log"
               MAAS_LOG="${ARTIFACT_DIR}/maas-must-gather.log"
               export DEPLOYMENT_NAMESPACE="${DEPLOYMENT_NAMESPACE:-opendatahub}"

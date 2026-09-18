@@ -119,11 +119,14 @@ collect_aigc_maas_crs_extensions() {
 }
 
 collect_aigc_e2e_artifacts() {
-  if [[ "$(type -t collect_e2e_artifacts 2>/dev/null)" != "function" ]]; then
-    echo "WARN: collect_e2e_artifacts not loaded from MaaS auth_utils" >&2
-    return 0
+  if [[ "$(type -t collect_e2e_artifacts 2>/dev/null)" == "function" ]]; then
+    collect_e2e_artifacts || true
   fi
-  collect_e2e_artifacts
+  # Run last so this oc-capable copy wins over the pinned MaaS auth_utils
+  # (kubectl-only; silent empty files when kubectl is absent).
+  if [[ -f "${_AIGC_SCRIPT_DIR}/collect-e2e-artifacts.sh" ]]; then
+    ARTIFACT_DIR="${ARTIFACTS_DIR}" bash "${_AIGC_SCRIPT_DIR}/collect-e2e-artifacts.sh" || true
+  fi
   collect_aigc_maas_crs_extensions
   collect_maas_must_gather "$ARTIFACTS_DIR/gather-maas" "$ARTIFACTS_DIR/maas-must-gather.log"
   if [[ "${E2E_COLLECT_MUST_GATHER:-false}" == "true" ]]; then
