@@ -26,9 +26,8 @@ func NewAITenant() *unstructured.Unstructured {
 	return u
 }
 
-// PayloadProcessingType reads the AnnotationPayloadProcessingType
-// annotation. Absent/empty means IPP; this package only cares whether it
-// equals PayloadProcessingBackendPraxis.
+// PayloadProcessingType reads MaaS's current annotation selector. Absent,
+// empty, or another value means the existing IPP path.
 func PayloadProcessingType(aitenant *unstructured.Unstructured) string {
 	return aitenant.GetAnnotations()[AnnotationPayloadProcessingType]
 }
@@ -36,6 +35,12 @@ func PayloadProcessingType(aitenant *unstructured.Unstructured) string {
 // UsesPraxis reports whether the AITenant opted into this controller.
 func UsesPraxis(aitenant *unstructured.Unstructured) bool {
 	return PayloadProcessingType(aitenant) == PayloadProcessingBackendPraxis
+}
+
+// IsIPPMigrationCleanupComplete reports whether maas-controller has finished
+// one-shot legacy IPP cleanup for this tenant (mirrors MaasTenantConfig marker).
+func IsIPPMigrationCleanupComplete(aitenant *unstructured.Unstructured) bool {
+	return aitenant.GetAnnotations()[AnnotationIPPMigrationCleanupComplete] == "true"
 }
 
 // IsActive reports whether maas-controller's AITenant reconciler has
@@ -57,4 +62,13 @@ func GatewayRef(aitenant *unstructured.Unstructured) (name, namespace string, ok
 	name, _, _ = unstructured.NestedString(aitenant.Object, "status", "gatewayRef", "name")
 	namespace, _, _ = unstructured.NestedString(aitenant.Object, "status", "gatewayRef", "namespace")
 	return name, namespace, name != "" && namespace != ""
+}
+
+// ResolvedNamespace returns MaaS's resolved tenant namespace. It is distinct
+// from GatewayRef's namespace: Gateway/ExtProc resources may live with the
+// Gateway, while standalone Praxis and ExternalModel resources are tenant
+// scoped. The empty result means MaaS has not published the resolution yet.
+func ResolvedNamespace(aitenant *unstructured.Unstructured) string {
+	namespace, _, _ := unstructured.NestedString(aitenant.Object, "status", "tenantNamespace")
+	return namespace
 }

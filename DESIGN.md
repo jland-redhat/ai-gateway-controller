@@ -1,5 +1,10 @@
 # ai-gateway-controller — Design
 
+Architecture decisions are maintained in the Open Data Hub ADR repository.
+The External Model/Praxis two-plane decision is tracked as
+[ODH-ADR-MS-0005](https://github.com/opendatahub-io/architecture-decision-records/pull/165),
+so this implementation repository does not carry a second authoritative copy.
+
 ## Status
 
 **Phase 1:** `make build` (tidy, lint, test, binary) passes clean. Not yet
@@ -252,6 +257,7 @@ ai-gateway-controller/
 | Flag | Default | Purpose |
 |---|---|---|
 | `--image` | `quay.io/opendatahub/odh-praxis-extproc:odh-stable` | Replaces the `praxis-extproc:dev` placeholder image |
+| `--praxis-image` | required | Immutable image digest for the tenant-scoped standalone Praxis Deployment; startup fails when omitted |
 | `--manifest-path` | `/config/manifests/praxis-extproc/overlays/odh` | kustomize entrypoint (matches the Dockerfile `COPY` destination) |
 | `--maas-api-route-name` | `maas-api-route` | Base name; suffixed per tenant like every other resource. Best-effort — exact fidelity depends on maas-api's real HTTPRoute name and Istio's route-naming scheme |
 | `--resync-interval` | `5m` | `RequeueAfter` once a tenant's resources are applied, so drift gets corrected periodically even without a new `AITenant` watch event |
