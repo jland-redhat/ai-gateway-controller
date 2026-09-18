@@ -7,8 +7,8 @@
 
 set -euo pipefail
 
-# Branch ci/e2e-maas-pr-1505: deploy maas-controller built from MaaS PR #1505.
-MAAS_IMAGE_TAG="${MAAS_IMAGE_TAG:-odh-pr-1505}"
+# Branch ci/e2e-maas-pr-1508: deploy maas-controller built from MaaS PR #1508.
+MAAS_IMAGE_TAG="${MAAS_IMAGE_TAG:-odh-pr-1508}"
 
 export MAAS_API_IMAGE="${MAAS_API_IMAGE:-quay.io/opendatahub/maas-api:${MAAS_IMAGE_TAG}}"
 export MAAS_CONTROLLER_IMAGE="${MAAS_CONTROLLER_IMAGE:-quay.io/opendatahub/maas-controller:${MAAS_IMAGE_TAG}}"
