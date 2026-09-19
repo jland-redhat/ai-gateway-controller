@@ -187,6 +187,10 @@ spec:
             emptyDir: {}
           - name: test-status
             emptyDir: {}
+          # Shared across e2e / collect / must-gather / git-push (MaaS pattern:
+          # maas-crs + pod-logs must land here before secure-git-push runs).
+          - name: artifacts
+            emptyDir: {}
         workspaces:
           - name: basic-auth
             optional: true
@@ -246,6 +250,8 @@ spec:
                 mountPath: /credentials
               - name: test-status
                 mountPath: /test-status
+              - name: artifacts
+                mountPath: /workspace/artifacts-dir
             script: |
               set -euxo pipefail
 
@@ -301,10 +307,66 @@ spec:
               echo "PRAXIS_EXTPROC_IMAGE=${PRAXIS_EXTPROC_IMAGE}"
 
               mkdir -p "${ARTIFACT_DIR}"
+              set +e
               ./test/e2e/scripts/prow_run_ai_gateway_controller_test.sh \
                 2>&1 | tee "${ARTIFACT_DIR}/prow.log"
+              PROW_RC=${PIPESTATUS[0]}
+              set -e
 
-              echo "success" > "$STATUS_FILE"
+              # Same place MaaS writes maas-crs/ + pod-logs/: inside the e2e step
+              # into ARTIFACT_DIR before git-push (see models-as-a-service group-test).
+              echo "Collecting MaaS artifacts into ${ARTIFACT_DIR} ..."
+              export ARTIFACTS_DIR="${ARTIFACT_DIR}"
+              export DEPLOYMENT_NAMESPACE="${DEPLOYMENT_NAMESPACE:-opendatahub}"
+              export MAAS_SUBSCRIPTION_NAMESPACE="${MAAS_SUBSCRIPTION_NAMESPACE:-models-as-a-service}"
+              export GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE:-openshift-ingress}"
+              export AUTHORINO_NAMESPACE="${AUTHORINO_NAMESPACE:-kuadrant-system}"
+              export LLM_NAMESPACE="${LLM_NAMESPACE:-llm}"
+              export ISTIO_NAMESPACE="${ISTIO_NAMESPACE:-istio-system}"
+              bash ./test/e2e/scripts/collect-e2e-artifacts.sh || true
+              echo "Artifact tree after collect:"
+              find "${ARTIFACT_DIR}" -maxdepth 2 -type d -print || true
+              ls -la "${ARTIFACT_DIR}" || true
+              ls -la "${ARTIFACT_DIR}/maas-crs" || true
+              ls -la "${ARTIFACT_DIR}/pod-logs" || true
+
+              if [ "${PROW_RC}" -eq 0 ]; then
+                echo "success" > "$STATUS_FILE"
+              else
+                echo "failed" > "$STATUS_FILE"
+                exit "${PROW_RC}"
+              fi
+          - name: collect-maas-artifacts
+            onError: continue
+            image: quay.io/rhoai/rhoai-task-toolset:maas
+            env:
+              - name: KUBECONFIG
+                value: "/credentials/$(steps.get-kubeconfig.results.kubeconfig)"
+              - name: ARTIFACT_DIR
+                value: /workspace/artifacts-dir
+              - name: DEPLOYMENT_NAMESPACE
+                value: opendatahub
+              - name: MAAS_SUBSCRIPTION_NAMESPACE
+                value: models-as-a-service
+              - name: GATEWAY_NAMESPACE
+                value: openshift-ingress
+              - name: AUTHORINO_NAMESPACE
+                value: kuadrant-system
+              - name: LLM_NAMESPACE
+                value: llm
+              - name: ISTIO_NAMESPACE
+                value: istio-system
+            workingDir: /workspace/source
+            volumeMounts:
+              - name: credentials
+                mountPath: /credentials
+              - name: artifacts
+                mountPath: /workspace/artifacts-dir
+            script: |
+              set -euo pipefail
+              # Backup collect (same as e2e step) if EXIT-trap collection missed.
+              bash ./test/e2e/scripts/collect-e2e-artifacts.sh
+              ls -la "${ARTIFACT_DIR}" "${ARTIFACT_DIR}/maas-crs" "${ARTIFACT_DIR}/pod-logs" || true
           - name: must-gather
             onError: continue
             image: quay.io/rhoai/rhoai-task-toolset:maas
@@ -317,11 +379,11 @@ spec:
             volumeMounts:
               - name: credentials
                 mountPath: /credentials
+              - name: artifacts
+                mountPath: /workspace/artifacts-dir
             script: |
               set -euo pipefail
               mkdir -p "${ARTIFACT_DIR}/gather-openshift" "${ARTIFACT_DIR}/gather-maas"
-              # Billing-style maas-crs/, cluster-state.log, pod-logs/ next to gather-maas/.
-              bash ./test/e2e/scripts/collect-e2e-artifacts.sh || true
               LOG="${ARTIFACT_DIR}/must-gather.log"
               MAAS_LOG="${ARTIFACT_DIR}/maas-must-gather.log"
               export DEPLOYMENT_NAMESPACE="${DEPLOYMENT_NAMESPACE:-opendatahub}"
@@ -356,6 +418,9 @@ spec:
                   value: main
                 - name: pathInRepo
                   value: stepactions/secure-git-push/0.1/secure-git-push.yaml
+            volumeMounts:
+              - name: artifacts
+                mountPath: /workspace/artifacts-dir
             params:
               - name: source-path
                 value: /workspace/artifacts-dir
