@@ -295,13 +295,35 @@ _enable_praxis_on_default_tenant() {
   local ns
   ns="$(_tenant_config_namespace)"
   if ! oc get maastenantconfig "${MAAS_TENANT_CONFIG_NAME}" -n "${ns}" &>/dev/null; then
-    echo "WARN: MaasTenantConfig ${ns}/${MAAS_TENANT_CONFIG_NAME} not found; skipping praxis opt-in annotation" >&2
-    return 0
+    echo "ERROR: MaasTenantConfig ${ns}/${MAAS_TENANT_CONFIG_NAME} not found; cannot opt into praxis" >&2
+    oc get maastenantconfig -A 2>/dev/null || true
+    return 1
   fi
-  # Annotation is only read from MaasTenantConfig. Annotating AITenant does nothing.
-  echo "Opting MaasTenantConfig ${ns}/${MAAS_TENANT_CONFIG_NAME} into praxis (maas.opendatahub.io/payload-processing-type=praxis) ..."
+
+  # aigc only reads these from MaasTenantConfig (never AITenant).
+  # type=praxis selects ExtProc; cleanup-complete is the #1508 handoff clear-to-claim
+  # so aigc may deploy (claims steady). In e2e we set both: maas-controller may not
+  # write cleanup-complete before our wait times out.
+  echo "Annotating MaasTenantConfig ${ns}/${MAAS_TENANT_CONFIG_NAME}: type=praxis status=cleanup-complete ..."
   oc annotate maastenantconfig "${MAAS_TENANT_CONFIG_NAME}" -n "${ns}" \
-    maas.opendatahub.io/payload-processing-type=praxis --overwrite
+    maas.opendatahub.io/payload-processing-type=praxis \
+    maas.opendatahub.io/payload-processing-status=cleanup-complete \
+    --overwrite
+
+  local type status
+  type="$(oc get maastenantconfig "${MAAS_TENANT_CONFIG_NAME}" -n "${ns}" \
+    -o jsonpath='{.metadata.annotations.maas\.opendatahub\.io/payload-processing-type}' 2>/dev/null || true)"
+  status="$(oc get maastenantconfig "${MAAS_TENANT_CONFIG_NAME}" -n "${ns}" \
+    -o jsonpath='{.metadata.annotations.maas\.opendatahub\.io/payload-processing-status}' 2>/dev/null || true)"
+  if [[ "${type}" != "praxis" ]]; then
+    echo "ERROR: payload-processing-type did not stick (got '${type}')" >&2
+    return 1
+  fi
+  if [[ "${status}" != "cleanup-complete" && "${status}" != "steady" ]]; then
+    echo "ERROR: payload-processing-status did not stick (got '${status}')" >&2
+    return 1
+  fi
+  echo "MaasTenantConfig annotations OK: type=${type} status=${status}"
 }
 
 _protect_praxis_from_maas_reconcile() {
@@ -341,13 +363,13 @@ echo "  gateway: ${GATEWAY_NAMESPACE}/${GATEWAY_NAME}"
 echo "  remove maas IPP: ${REMOVE_MAAS_IPP}"
 
 # Apply the controller first so it is watching when the tenant opts in.
-# Do not pause maas-controller or delete IPP here: Ryan's #1508 handoff has
-# maas-controller tear down legacy IPP and write payload-processing-status=
-# cleanup-complete. aigc then claims steady and creates payload-processing.
+# Then annotate MaasTenantConfig (type=praxis + cleanup-complete) and remove
+# legacy IPP so aigc can claim steady and create payload-processing.
 _apply_ai_gateway_controller
 
 if [[ "${REMOVE_MAAS_IPP}" == "true" ]]; then
   _enable_praxis_on_default_tenant
+  _delete_legacy_ipp_in_gateway_namespace
   _wait_for_aigc_praxis_reconcile
   _wait_for_praxis_extproc
   _protect_praxis_from_maas_reconcile
