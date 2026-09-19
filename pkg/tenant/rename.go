@@ -249,19 +249,23 @@ func renamePayloadDestinationRule(u *unstructured.Unstructured, serviceName, nam
 // renamePayloadProcessingEnvoyFilter renames the EnvoyFilter and repoints
 // its dedicated ext_proc upstream CLUSTER definitions (see envoy-filter.yaml,
 // "Dedicated ExtProc upstream clusters") at this tenant's Service FQDNs. The
-// Envoy-internal filter and cluster_name literals
-// (envoy.filters.http.ext_proc.ipp[-pre], payload[-pre]-processing-extproc)
-// are deliberately left unsuffixed, same as maas-controller's own IPP
-// EnvoyFilter: both assume one Gateway per tenant, so there is no risk of
-// two tenants' filter chains colliding on the same Envoy instance.
+// shared buffered ipp and pre-ipp filter names remain unchanged so the
+// upstream KServe/MaaS chain is recognizable and can be disabled only on the
+// controller-owned ExternalModel routes. The separate ExternalModel filter
+// and cluster use a tenant-qualified Service and are enabled by route-level
+// patches added by the ExternalModel controller.
 func renamePayloadProcessingEnvoyFilter(u *unstructured.Unstructured, tenantID, namespace string) error {
 	if err := setName(u, PayloadProcessingEnvoyFilterName(tenantID)); err != nil {
 		return err
 	}
+	return patchPayloadProcessingEnvoyFilterNamespaces(u, tenantID, namespace, namespace)
+}
 
+func patchPayloadProcessingEnvoyFilterNamespaces(u *unstructured.Unstructured, tenantID, gatewayNamespace, tenantNamespace string) error {
 	targets := map[string]string{
-		"payload-pre-processing-extproc": serviceFQDN(PayloadPreProcessingServiceName(tenantID), namespace),
-		"payload-processing-extproc":     serviceFQDN(PayloadProcessingServiceName(tenantID), namespace),
+		"payload-pre-processing-extproc":            serviceFQDN(PayloadPreProcessingServiceName(tenantID), gatewayNamespace),
+		"payload-processing-extproc":                serviceFQDN(PayloadProcessingServiceName(tenantID), tenantNamespace),
+		"payload-processing-external-model-extproc": serviceFQDN(PayloadProcessingExternalModelServiceName(tenantID), tenantNamespace),
 	}
 
 	configPatches, found, err := unstructured.NestedSlice(u.Object, "spec", "configPatches")

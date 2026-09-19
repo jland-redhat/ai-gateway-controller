@@ -52,7 +52,7 @@ fetch_praxis_extproc() {
 
 # The vendored ExtProc workload reads routing ConfigMaps and inference CRs but
 # does not consume provider Secrets. Credentials are projected only into the
-# tenant-local standalone Praxis workload. Keep this downstream least-privilege
+# tenant-local credential-bearing ExtProc workload. Keep this downstream least-privilege
 # adjustment structural and fail closed so regeneration cannot silently restore
 # Secret API access to ExtProc.
 normalize_extproc_cluster_role() {

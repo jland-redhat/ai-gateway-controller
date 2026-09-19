@@ -212,6 +212,28 @@ func TestResolve_MergedConfigAndPathTemplates(t *testing.T) {
 	}
 }
 
+func TestResolve_MergedConfigCarriesMountedTLSCAPath(t *testing.T) {
+	m := model("ns1", "m", ref("p", "target", "/v1"))
+	p := provider("ns1", "p", PhaseReady, "provider.example.com", map[string]string{
+		"tls.caCertificates": "/etc/istio/provider-ca/ca.crt",
+	})
+	set, err := Resolve([]*v1alpha1.ExternalModel{m}, []*v1alpha1.ExternalProvider{p})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if got := set.Routes()[0].TLSCACertificates; got != "/etc/istio/provider-ca/ca.crt" {
+		t.Fatalf("TLS CA path = %q", got)
+	}
+}
+
+func TestResolve_RejectsUnsafeTLSCAPath(t *testing.T) {
+	m := model("ns1", "m", ref("p", "target", "/v1"))
+	p := provider("ns1", "p", PhaseReady, "provider.example.com", map[string]string{"tls.caCertificates": "../ca.crt"})
+	if _, err := Resolve([]*v1alpha1.ExternalModel{m}, []*v1alpha1.ExternalProvider{p}); err == nil {
+		t.Fatal("unsafe TLS CA path must be rejected")
+	}
+}
+
 func TestResolve_PathErrors(t *testing.T) {
 	cases := []struct {
 		name string

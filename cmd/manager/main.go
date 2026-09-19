@@ -39,6 +39,11 @@ import (
 
 var setupLog = ctrl.Log.WithName("setup")
 
+// buildVersion is replaced by release/container builds with -ldflags
+// -X main.buildVersion=...; local builds retain the explicit development
+// value rather than claiming an unknown release version.
+var buildVersion = "dev"
+
 func main() {
 	var (
 		metricsAddr          string
@@ -81,7 +86,7 @@ func main() {
 	flag.StringVar(&gatewayNamespace, "gateway-namespace", "openshift-ingress", "Gateway parent namespace for ExternalModel HTTPRoutes.")
 	flag.StringVar(&network, "routing-network", "external-model", "Routing overlay network scope.")
 	flag.StringVar(&localSite, "routing-local-site", "local", "Routing overlay local-site scope.")
-	flag.Func("known-cluster", "Predeclared Praxis load_balancer cluster; repeat for each provider cluster.", func(value string) error {
+	flag.Func("known-cluster", "Optional administrative upper bound for a rendered provider cluster; repeat for each cluster.", func(value string) error {
 		knownClusters = append(knownClusters, value)
 		return nil
 	})
@@ -147,7 +152,7 @@ func main() {
 	modelReconciler := &controller.Reconciler{
 		Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), Scheme: mgr.GetScheme(), Namespace: externalNamespace,
 		GatewayName: gatewayName, GatewayNamespace: gatewayNamespace, Network: network,
-		LocalSite: localSite, KnownClusters: knownClusters,
+		LocalSite: localSite, KnownClusters: knownClusters, ProducerVersion: buildVersion,
 		Log: ctrl.Log.WithName("external-model"),
 	}
 	if err := modelReconciler.SetupWithManager(mgr); err != nil {

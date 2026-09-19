@@ -8,6 +8,7 @@ ARG CGO_ENABLED=1
 ARG GOEXPERIMENT=strictfipsruntime
 ARG TARGETOS
 ARG TARGETARCH
+ARG VERSION=dev
 
 WORKDIR /app
 COPY go.mod go.sum ./
@@ -19,7 +20,7 @@ COPY pkg/ pkg/
 
 USER root
 
-RUN CGO_ENABLED=${CGO_ENABLED} GOEXPERIMENT=${GOEXPERIMENT} GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -a -trimpath -ldflags="-s -w" -o manager ./cmd/manager
+RUN CGO_ENABLED=${CGO_ENABLED} GOEXPERIMENT=${GOEXPERIMENT} GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -a -trimpath -ldflags="-s -w -X main.buildVersion=${VERSION}" -o manager ./cmd/manager
 
 FROM --platform=$TARGETPLATFORM registry.access.redhat.com/ubi9/ubi-minimal:latest
 

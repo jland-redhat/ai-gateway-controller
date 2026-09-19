@@ -28,10 +28,11 @@ import (
 // consumer ... Placeholder FQDNs / gateway names ... are rewritten by the
 // controller."
 type Params struct {
-	// Namespace is both where the manifests are installed and the Gateway's
-	// namespace: praxis-extproc must run alongside its Gateway for
-	// EnvoyFilter workloadSelector / targetRefs to resolve. Replaces every
-	// "openshift-ingress" placeholder.
+	// Namespace is the initial render and Gateway namespace. The tenant
+	// reconciler subsequently moves the post-auth workload and its
+	// namespace-scoped configuration to the resolved tenant namespace while
+	// keeping EnvoyFilter and Gateway-facing mesh resources here. Replaces
+	// every "openshift-ingress" placeholder.
 	Namespace string
 	// GatewayName replaces the "maas-default-gateway" placeholder.
 	GatewayName string

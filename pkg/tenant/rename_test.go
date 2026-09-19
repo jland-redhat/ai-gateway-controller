@@ -383,6 +383,7 @@ func envoyFilterFixture() unstructured.Unstructured {
 				map[string]any{"applyTo": "HTTP_FILTER"}, // unrelated patch, must be left alone
 				clusterPatch("payload-pre-processing-extproc", "payload-pre-processing.istio-system.svc.cluster.local"),
 				clusterPatch("payload-processing-extproc", "payload-processing.istio-system.svc.cluster.local"),
+				clusterPatch("payload-processing-external-model-extproc", "payload-processing-external-model.istio-system.svc.cluster.local"),
 			},
 		},
 	}}
@@ -400,18 +401,21 @@ func TestRenameEnvoyFilterRepointsClusterAddresses(t *testing.T) {
 	}
 
 	configPatches, _, _ := unstructured.NestedSlice(out[0].Object, "spec", "configPatches")
-	if len(configPatches) != 3 {
-		t.Fatalf("configPatches length = %d, want 3 (unrelated patch preserved)", len(configPatches))
+	if len(configPatches) != 4 {
+		t.Fatalf("configPatches length = %d, want 4 (unrelated patch preserved)", len(configPatches))
 	}
 
 	preValue := mustMap(t, mustMap(t, mustMap(t, configPatches[1])["patch"])["value"])
 	postValue := mustMap(t, mustMap(t, mustMap(t, configPatches[2])["patch"])["value"])
+	externalValue := mustMap(t, mustMap(t, mustMap(t, configPatches[3])["patch"])["value"])
 
 	wantPreFQDN := "payload-pre-processing-redteam.istio-system.svc.cluster.local"
 	wantPostFQDN := "payload-processing-redteam.istio-system.svc.cluster.local"
+	wantExternalFQDN := "payload-processing-external-model-redteam.istio-system.svc.cluster.local"
 
 	assertClusterAddress(t, preValue, wantPreFQDN)
 	assertClusterAddress(t, postValue, wantPostFQDN)
+	assertClusterAddress(t, externalValue, wantExternalFQDN)
 
 	// cluster_name / filter literals are intentionally left unsuffixed.
 	if preValue["name"] != "payload-pre-processing-extproc" {

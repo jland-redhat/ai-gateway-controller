@@ -24,7 +24,9 @@ data:
     insecure_options:
       allow_unbounded_body: true
 
-  # Post-auth (IPP) Praxis chain: full processing pipeline.
+  # Existing MaaS post-auth chain. ExternalModel routing is deliberately not
+  # placed here: this buffered pipeline is shared by normal MaaS/KServe
+  # traffic and must remain unchanged.
   extproc.yaml: |
     server:
       grpc_address: "0.0.0.0:9004"
