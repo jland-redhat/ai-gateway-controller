@@ -697,19 +697,17 @@ while :; do
   sleep 3
 done
 for _ in $(seq 1 60); do
-  post_auth_sa=$("${OC[@]}" get serviceaccount payload-processing-post -n "$OPENSHIFT_E2E_TENANT_NAMESPACE" -o jsonpath='{.metadata.name}' 2>/dev/null || true)
   external_model_sa=$("${OC[@]}" get serviceaccount payload-processing-external-model -n "$OPENSHIFT_E2E_TENANT_NAMESPACE" -o jsonpath='{.metadata.name}' 2>/dev/null || true)
-  [[ -n "$post_auth_sa" && -n "$external_model_sa" ]] && break
+  [[ -n "$external_model_sa" ]] && break
   sleep 2
 done
-[[ -n "${post_auth_sa:-}" && -n "${external_model_sa:-}" ]] || { echo "controller did not create both tenant ExtProc ServiceAccounts" >&2; exit 1; }
-for tenant_sa in "$post_auth_sa" "$external_model_sa"; do
-  attach_pull_secret_to_sa "$OPENSHIFT_E2E_TENANT_NAMESPACE" "$tenant_sa"
-  "${OC[@]}" apply -f - >>"$OUT/image-puller-resolved-tenant.log" <<EOF
+[[ -n "${external_model_sa:-}" ]] || { echo "controller did not create the tenant-local ExternalModel ExtProc ServiceAccount" >&2; exit 1; }
+attach_pull_secret_to_sa "$OPENSHIFT_E2E_TENANT_NAMESPACE" "$external_model_sa"
+"${OC[@]}" apply -f - >>"$OUT/image-puller-resolved-tenant.log" <<EOF
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: image-puller-$tenant_sa-$OPENSHIFT_E2E_RUN_ID
+  name: image-puller-$external_model_sa-$OPENSHIFT_E2E_RUN_ID
   namespace: $IMAGE_PROJECT
   labels:
     external-model-praxis.opendatahub.io/run-id: $OPENSHIFT_E2E_RUN_ID
@@ -720,27 +718,27 @@ roleRef:
   name: system:image-puller
 subjects:
 - kind: ServiceAccount
-  name: $tenant_sa
+  name: $external_model_sa
   namespace: $OPENSHIFT_E2E_TENANT_NAMESPACE
 EOF
-done
 # Pods copy imagePullSecrets from their ServiceAccount only at creation time.
-# Restart only the two run-owned ExtProc workloads after both exact bindings
-# and pull secrets are present.
-"${OC[@]}" rollout restart deployment/payload-processing -n "$OPENSHIFT_E2E_TENANT_NAMESPACE" >>"$OUT/restart-tenant-extproc.log"
+# Restart only the run-owned ExternalModel ExtProc workload after its exact
+# binding and pull secret are present. The shared MaaS/KServe workload is not
+# restarted or mutated by this harness.
 "${OC[@]}" rollout restart deployment/payload-processing-external-model -n "$OPENSHIFT_E2E_TENANT_NAMESPACE" >>"$OUT/restart-tenant-extproc.log"
-# ExtProc-only dataplane: the controller creates the pre-auth workload in the
-# Gateway namespace and the post-auth workload plus routing/credential mounts
-# in the resolved tenant namespace. There is intentionally no standalone
-# standalone dataplane image, Deployment, Service, or trust-bundle patch in
+# ExtProc-only dataplane: the shared MaaS/KServe pre-auth workload remains in
+# the Gateway namespace, while the controller-owned ExternalModel workload
+# and its routing/credential mounts live in the resolved tenant namespace.
+# There is intentionally no standalone dataplane image, Deployment, Service,
+# or trust-bundle patch in
 # this workflow.
 for _ in $(seq 1 150); do
   pre_ready=$("${OC[@]}" get deployment payload-pre-processing -n "$OPENSHIFT_E2E_GATEWAY_NAMESPACE" -o json 2>/dev/null | jq -r '.status.availableReplicas == 1' || true)
-  post_ready=$("${OC[@]}" get deployment payload-processing -n "$OPENSHIFT_E2E_TENANT_NAMESPACE" -o json 2>/dev/null | jq -r '.status.availableReplicas == 1' || true)
-  [[ "$pre_ready" == true && "$post_ready" == true ]] && break
+  external_model_ready=$("${OC[@]}" get deployment payload-processing-external-model -n "$OPENSHIFT_E2E_TENANT_NAMESPACE" -o json 2>/dev/null | jq -r '.status.availableReplicas == 1' || true)
+  [[ "$pre_ready" == true && "$external_model_ready" == true ]] && break
   sleep 2
 done
-[[ "${pre_ready:-false}" == true && "${post_ready:-false}" == true ]] || { echo "ExtProc-only pre/post-auth workloads did not become Ready" >&2; exit 1; }
+[[ "${pre_ready:-false}" == true && "${external_model_ready:-false}" == true ]] || { echo "shared pre-auth and ExternalModel ExtProc workloads did not become Ready" >&2; exit 1; }
 if "${OC[@]}" get deployment praxis -n "$OPENSHIFT_E2E_TENANT_NAMESPACE" -o name 2>/dev/null | grep -q .; then
   echo "legacy standalone dataplane Deployment exists in an ExtProc-only run" >&2
   exit 1

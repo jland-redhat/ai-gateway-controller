@@ -164,10 +164,22 @@ func TestRenderedExtProcPreservesBufferedMaaSAndAddsHeaderPhaseExternalModel(t *
 		if !ok {
 			continue
 		}
-		if patch["applyTo"] == "VIRTUAL_HOST" {
+		if patch["applyTo"] == "HTTP_ROUTE" {
 			typed := map[string]any{}
 			if value, ok := value["value"].(map[string]any); ok {
 				typed, _, _ = unstructured.NestedMap(value, "typed_per_filter_config")
+			}
+			if disabled, found, _ := unstructured.NestedBool(typed, "envoy.filters.http.ext_proc.external-model", "disabled"); found && disabled {
+				vhost, found, err := unstructured.NestedMap(patch, "match", "routeConfiguration", "vhost")
+				if err != nil || !found {
+					t.Fatalf("ExternalModel default-disable patch missing route match: found=%v err=%v", found, err)
+				}
+				if _, found := vhost["name"]; found {
+					t.Fatalf("ExternalModel default-disable patch must match all virtual hosts: %#v", vhost)
+				}
+				if action, found, _ := unstructured.NestedString(vhost, "route", "action"); !found || action != "ANY" {
+					t.Fatalf("ExternalModel default-disable patch must match every route: %#v", vhost)
+				}
 			}
 			for _, filterName := range []string{
 				"envoy.filters.http.ext_proc.external-model",

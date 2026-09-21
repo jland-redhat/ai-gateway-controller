@@ -1,6 +1,7 @@
 package tenant
 
 import (
+	"reflect"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -20,6 +21,7 @@ func TestSplitPostAuthResourcesUsesResolvedTenantNamespace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	sharedBeforeSplit := append([]unstructured.Unstructured(nil), resources...)
 	resources, err = SplitPostAuthResources(resources, "tenant-a", "gateway-system", "tenant-a")
 	if err != nil {
 		t.Fatal(err)
@@ -35,10 +37,33 @@ func TestSplitPostAuthResourcesUsesResolvedTenantNamespace(t *testing.T) {
 		t.Fatalf("missing %s %s/%s", kind, namespace, name)
 		return nil
 	}
+	findIn := func(items []unstructured.Unstructured, kind, name, namespace string) *unstructured.Unstructured {
+		for i := range items {
+			if items[i].GetKind() == kind && items[i].GetName() == name && items[i].GetNamespace() == namespace {
+				return &items[i]
+			}
+		}
+		return nil
+	}
+	for _, identity := range []struct{ kind, name, namespace string }{
+		{"Deployment", PayloadProcessingDeploymentName("tenant-a"), "gateway-system"},
+		{"Service", PayloadProcessingServiceName("tenant-a"), "gateway-system"},
+		{"ServiceAccount", PayloadProcessingServiceAccountName("tenant-a"), "gateway-system"},
+		{"ConfigMap", PayloadProcessingPluginsConfigMapForTenant("tenant-a"), "gateway-system"},
+		{"NetworkPolicy", PayloadProcessingNetworkPolicyName("tenant-a"), "gateway-system"},
+		{"DestinationRule", PayloadProcessingServiceName("tenant-a"), "gateway-system"},
+		{"EnvoyFilter", PayloadProcessingEnvoyFilterName("tenant-a"), "gateway-system"},
+	} {
+		before := findIn(sharedBeforeSplit, identity.kind, identity.name, identity.namespace)
+		after := findIn(resources, identity.kind, identity.name, identity.namespace)
+		if before == nil || after == nil || !reflect.DeepEqual(before.Object, after.Object) {
+			t.Fatalf("shared %s %s/%s changed during ExternalModel split", identity.kind, identity.namespace, identity.name)
+		}
+	}
 	find("Deployment", PayloadPreProcessingDeploymentName("tenant-a"), "gateway-system")
-	postDeployment := find("Deployment", PayloadProcessingDeploymentName("tenant-a"), "tenant-a")
-	if serviceAccount, _, _ := unstructured.NestedString(postDeployment.Object, "spec", "template", "spec", "serviceAccountName"); serviceAccount != PayloadProcessingPostServiceAccountName("tenant-a") {
-		t.Fatalf("post-auth Deployment ServiceAccount = %q, want %q", serviceAccount, PayloadProcessingPostServiceAccountName("tenant-a"))
+	postDeployment := find("Deployment", PayloadProcessingDeploymentName("tenant-a"), "gateway-system")
+	if serviceAccount, _, _ := unstructured.NestedString(postDeployment.Object, "spec", "template", "spec", "serviceAccountName"); serviceAccount != PayloadProcessingServiceAccountName("tenant-a") {
+		t.Fatalf("shared post-auth Deployment ServiceAccount = %q, want %q", serviceAccount, PayloadProcessingServiceAccountName("tenant-a"))
 	}
 	externalDeployment := find("Deployment", PayloadProcessingExternalModelDeploymentName("tenant-a"), "tenant-a")
 	if serviceAccount, _, _ := unstructured.NestedString(externalDeployment.Object, "spec", "template", "spec", "serviceAccountName"); serviceAccount != PayloadProcessingExternalModelServiceAccountName("tenant-a") {
@@ -60,20 +85,21 @@ func TestSplitPostAuthResourcesUsesResolvedTenantNamespace(t *testing.T) {
 		t.Fatalf("ExternalModel DestinationRule SNI = %q, want %q", sni, externalFQDN)
 	}
 	find("ServiceAccount", PayloadProcessingServiceAccountName("tenant-a"), "gateway-system")
-	postSA := find("ServiceAccount", PayloadProcessingPostServiceAccountName("tenant-a"), "tenant-a")
-	if got, _, _ := unstructured.NestedString(postSA.Object, "metadata", "name"); got != PayloadProcessingPostServiceAccountName("tenant-a") {
-		t.Fatalf("post-auth ServiceAccount = %q, want %q", got, PayloadProcessingPostServiceAccountName("tenant-a"))
+	for _, resource := range resources {
+		if resource.GetKind() == "ServiceAccount" && resource.GetName() == PayloadProcessingPostServiceAccountName("tenant-a") {
+			t.Fatal("shared post-auth ServiceAccount must not be moved or duplicated into the tenant namespace")
+		}
 	}
 	find("Service", PayloadPreProcessingServiceName("tenant-a"), "gateway-system")
-	find("Service", PayloadProcessingServiceName("tenant-a"), "tenant-a")
+	find("Service", PayloadProcessingServiceName("tenant-a"), "gateway-system")
 	postRule := find("DestinationRule", PayloadProcessingServiceName("tenant-a"), "gateway-system")
-	postFQDN := "payload-processing-tenant-a.tenant-a.svc.cluster.local"
+	postFQDN := "payload-processing-tenant-a.gateway-system.svc.cluster.local"
 	preFQDN := "payload-pre-processing-tenant-a.gateway-system.svc.cluster.local"
 	if host, _, _ := unstructured.NestedString(postRule.Object, "spec", "host"); host != postFQDN {
-		t.Fatalf("post-auth DestinationRule host = %q, want tenant-qualified Service FQDN", host)
+		t.Fatalf("shared post-auth DestinationRule host = %q, want Gateway-local Service FQDN", host)
 	}
 	if sni, _, _ := unstructured.NestedString(postRule.Object, "spec", "trafficPolicy", "tls", "sni"); sni != postFQDN {
-		t.Fatalf("post-auth DestinationRule SNI = %q, want tenant-qualified Service FQDN", sni)
+		t.Fatalf("shared post-auth DestinationRule SNI = %q, want Gateway-local Service FQDN", sni)
 	}
 	for _, resource := range resources {
 		if resource.GetKind() == "DestinationRule" && resource.GetName() == PayloadProcessingServiceName("tenant-a") && resource.GetNamespace() == "tenant-a" {
@@ -82,12 +108,13 @@ func TestSplitPostAuthResourcesUsesResolvedTenantNamespace(t *testing.T) {
 	}
 
 	gatewayConfig := find("ConfigMap", PayloadProcessingPluginsConfigMapForTenant("tenant-a"), "gateway-system")
-	if data, _, _ := unstructured.NestedStringMap(gatewayConfig.Object, "data"); data["extproc.yaml"] != "" {
-		t.Fatal("gateway ConfigMap must contain only the pre-auth configuration")
+	if data, _, _ := unstructured.NestedStringMap(gatewayConfig.Object, "data"); data["extproc.yaml"] == "" || data["pre-extproc.yaml"] == "" {
+		t.Fatal("shared Gateway ConfigMap must retain both buffered MaaS/KServe configurations")
 	}
-	tenantConfig := find("ConfigMap", PayloadProcessingPluginsConfigMapForTenant("tenant-a"), "tenant-a")
-	if data, _, _ := unstructured.NestedStringMap(tenantConfig.Object, "data"); data["extproc.yaml"] == "" || data["pre-extproc.yaml"] != "" {
-		t.Fatal("tenant ConfigMap must contain only the post-auth configuration")
+	for _, resource := range resources {
+		if resource.GetKind() == "ConfigMap" && resource.GetName() == PayloadProcessingPluginsConfigMapForTenant("tenant-a") && resource.GetNamespace() == "tenant-a" {
+			t.Fatal("shared payload-processing ConfigMap must not be moved into the tenant namespace")
+		}
 	}
 	externalConfig := find("ConfigMap", PayloadProcessingExternalModelPluginsConfigMapForTenant("tenant-a"), "tenant-a")
 	if data, _, _ := unstructured.NestedStringMap(externalConfig.Object, "data"); data["extproc.yaml"] == "" || data["pre-extproc.yaml"] != "" {
@@ -139,7 +166,7 @@ func TestSplitPostAuthResourcesUsesResolvedTenantNamespace(t *testing.T) {
 		}
 	}
 	if !foundTenantCluster {
-		t.Fatal("EnvoyFilter post-auth cluster must target the tenant-qualified Service FQDN")
+		t.Fatal("EnvoyFilter shared post-auth cluster must target the Gateway-local Service FQDN")
 	}
 	if !foundGatewayCluster {
 		t.Fatal("EnvoyFilter pre-auth cluster must remain Gateway-local")
@@ -148,6 +175,39 @@ func TestSplitPostAuthResourcesUsesResolvedTenantNamespace(t *testing.T) {
 		if resource.GetKind() == "ClusterRoleBinding" && resource.GetName() == PayloadProcessingReaderClusterRoleBindingPostNameForTenant("tenant-a") {
 			t.Fatal("post-auth ExtProc must not bind the shared MaaS reader ClusterRole")
 		}
+	}
+}
+
+func TestRemoveExternalModelResourcesLeavesSharedKServeResources(t *testing.T) {
+	requireManifests(t)
+	rendered, err := render.Build(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources := render.PostRender(rendered, render.Params{Namespace: "gateway-system", GatewayName: "gateway", Image: "extproc:dev"})
+	resources, err = Rename(resources, "tenant-a", "gateway-system")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources, err = SplitPostAuthResources(resources, "tenant-a", "gateway-system", "tenant-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources = RemoveExternalModelResources(resources, "tenant-a")
+	sharedFilter, externalFilter := false, false
+	for _, resource := range resources {
+		if resource.GetKind() != "EnvoyFilter" {
+			continue
+		}
+		switch resource.GetName() {
+		case PayloadProcessingEnvoyFilterName("tenant-a"):
+			sharedFilter = true
+		case PayloadProcessingExternalModelFilterNameForTenant("tenant-a"):
+			externalFilter = true
+		}
+	}
+	if !sharedFilter || externalFilter {
+		t.Fatalf("shared EnvoyFilter present=%t, ExternalModel EnvoyFilter present=%t", sharedFilter, externalFilter)
 	}
 }
 
@@ -166,14 +226,10 @@ func TestSplitPostAuthResourcesSeparatesSameNamespaceServiceAccount(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	post := false
 	external := false
 	externalService := false
 	externalConfig := false
 	for _, resource := range resources {
-		if resource.GetKind() == "ServiceAccount" && resource.GetName() == PayloadProcessingPostServiceAccountName("tenant-a") {
-			post = true
-		}
 		if resource.GetKind() == "ServiceAccount" && resource.GetName() == PayloadProcessingExternalModelServiceAccountName("tenant-a") {
 			external = true
 		}
@@ -186,9 +242,6 @@ func TestSplitPostAuthResourcesSeparatesSameNamespaceServiceAccount(t *testing.T
 		if resource.GetKind() == "ClusterRoleBinding" && resource.GetName() == PayloadProcessingReaderClusterRoleBindingPostNameForTenant("tenant-a") {
 			t.Fatal("same-namespace post-auth ExtProc must not bind the shared MaaS reader ClusterRole")
 		}
-	}
-	if !post {
-		t.Fatalf("missing same-namespace post-auth ServiceAccount %s", PayloadProcessingPostServiceAccountName("tenant-a"))
 	}
 	if !external {
 		t.Fatalf("missing same-namespace ExternalModel ServiceAccount %s", PayloadProcessingExternalModelServiceAccountName("tenant-a"))

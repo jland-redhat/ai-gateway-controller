@@ -272,7 +272,11 @@ account Secret-read permissions. The ExternalModel ServiceAccount has no
 Kubernetes Secret API binding; provider credentials are available only as
 kubelet-projected files from the explicitly referenced tenant Secret. The
 pre-auth ExtProc retains its Gateway-side ServiceAccount and resources. The
-E2E checks the exact ExternalModel post-auth ServiceAccount with `oc auth
+shared `payload-processing` Deployment, Service, plugin ConfigMap,
+DestinationRule, and EnvoyFilter remain in the namespace and TLS identity
+rendered by MaaS; the controller does not retarget that KServe/MaaS chain when
+it creates the tenant-local ExternalModel copy. The E2E checks the exact
+ExternalModel post-auth ServiceAccount with `oc auth
 can-i`; a failure at that boundary stops qualification.
 
 Provider A and Provider B are controlled test endpoints used to demonstrate a

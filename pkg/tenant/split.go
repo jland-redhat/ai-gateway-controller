@@ -17,9 +17,11 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
-// SplitPostAuthResources keeps Gateway-facing pre-auth resources in the
-// Gateway namespace and places the post-auth workload and its namespace-
-// scoped configuration in the resolved tenant namespace.
+// SplitPostAuthResources preserves the rendered MaaS/KServe payload-
+// processing resources in the Gateway namespace and adds only the dedicated
+// ExternalModel ExtProc copy in the resolved tenant namespace. The shared
+// filter, workload, Service, TLS identity, and buffered configuration are
+// intentionally not retargeted by this function.
 //
 //nolint:gocyclo // Namespace/resource splitting is an explicit compatibility matrix; each branch preserves a distinct ownership contract.
 func SplitPostAuthResources(resources []unstructured.Unstructured, tenantID, gatewayNamespace, tenantNamespace string) ([]unstructured.Unstructured, error) {
@@ -29,9 +31,6 @@ func SplitPostAuthResources(resources []unstructured.Unstructured, tenantID, gat
 			u := resources[i].DeepCopy()
 			switch {
 			case u.GetKind() == "Deployment" && u.GetName() == PayloadProcessingDeploymentName(tenantID):
-				if err := unstructured.SetNestedField(u.Object, PayloadProcessingPostServiceAccountName(tenantID), "spec", "template", "spec", "serviceAccountName"); err != nil {
-					return nil, fmt.Errorf("set post-auth ServiceAccount: %w", err)
-				}
 				out = append(out, *u)
 				external := u.DeepCopy()
 				if err := configureExternalModelDeployment(external, tenantID); err != nil {
@@ -40,9 +39,6 @@ func SplitPostAuthResources(resources []unstructured.Unstructured, tenantID, gat
 				out = append(out, *external)
 			case u.GetKind() == "ServiceAccount" && u.GetName() == PayloadProcessingServiceAccountName(tenantID):
 				out = append(out, *u)
-				post := u.DeepCopy()
-				post.SetName(PayloadProcessingPostServiceAccountName(tenantID))
-				out = append(out, *post)
 				external := u.DeepCopy()
 				external.SetName(PayloadProcessingExternalModelServiceAccountName(tenantID))
 				out = append(out, *external)
@@ -88,32 +84,25 @@ func SplitPostAuthResources(resources []unstructured.Unstructured, tenantID, gat
 		u := resources[i].DeepCopy()
 		switch {
 		case u.GetKind() == "Deployment" && u.GetName() == PayloadProcessingDeploymentName(tenantID):
-			u.SetNamespace(tenantNamespace)
-			if err := unstructured.SetNestedField(u.Object, PayloadProcessingPostServiceAccountName(tenantID), "spec", "template", "spec", "serviceAccountName"); err != nil {
-				return nil, fmt.Errorf("set post-auth ServiceAccount: %w", err)
-			}
 			out = append(out, *u)
 			external := u.DeepCopy()
+			external.SetNamespace(tenantNamespace)
 			if err := configureExternalModelDeployment(external, tenantID); err != nil {
 				return nil, err
 			}
 			out = append(out, *external)
 		case u.GetKind() == "Service" && u.GetName() == PayloadProcessingServiceName(tenantID):
-			u.SetNamespace(tenantNamespace)
 			out = append(out, *u)
 			external := u.DeepCopy()
+			external.SetNamespace(tenantNamespace)
 			external.SetName(PayloadProcessingExternalModelServiceName(tenantID))
 			if err := setServiceSelector(external, map[string]string{"app": PayloadProcessingExternalModelName, LabelTenantInstance: PayloadProcessingExternalModelDeploymentName(tenantID)}); err != nil {
 				return nil, fmt.Errorf("external-model Service selector: %w", err)
 			}
 			out = append(out, *external)
 		case u.GetKind() == "DestinationRule" && u.GetName() == PayloadProcessingServiceName(tenantID):
-			// DestinationRule is Gateway-side mesh configuration. Keep it with
-			// the Gateway/Envoy resources while its host/SNI points at the
-			// tenant-qualified ExtProc Service.
-			if err := renamePayloadDestinationRule(u, PayloadProcessingServiceName(tenantID), tenantNamespace); err != nil {
-				return nil, err
-			}
+			// Rename already left the shared MaaS/KServe DestinationRule
+			// pointing at the Gateway-local payload-processing Service.
 			out = append(out, *u)
 			external := u.DeepCopy()
 			if err := renamePayloadDestinationRule(external, PayloadProcessingExternalModelServiceName(tenantID), tenantNamespace); err != nil {
@@ -121,45 +110,21 @@ func SplitPostAuthResources(resources []unstructured.Unstructured, tenantID, gat
 			}
 			out = append(out, *external)
 		case u.GetKind() == "ConfigMap" && u.GetName() == PayloadProcessingPluginsConfigMapForTenant(tenantID):
-			post := u.DeepCopy()
-			if err := splitPluginConfigMap(u); err != nil {
+			out = append(out, *u)
+			external := u.DeepCopy()
+			external.SetNamespace(tenantNamespace)
+			if err := keepExternalModelConfig(external); err != nil {
 				return nil, err
 			}
-			out = append(out, *u)
-			post.SetNamespace(tenantNamespace)
-			data, found, err := unstructured.NestedStringMap(post.Object, "data")
-			if err != nil {
-				return nil, fmt.Errorf("read tenant post-auth ConfigMap data: %w", err)
-			}
-			if !found {
-				return nil, errors.New("tenant post-auth ConfigMap data is missing")
-			}
-			for key := range data {
-				if key != "extproc.yaml" {
-					delete(data, key)
-				}
-			}
-			if err := unstructured.SetNestedStringMap(post.Object, data, "data"); err != nil {
-				return nil, fmt.Errorf("write tenant post-auth ConfigMap: %w", err)
-			}
-			out = append(out, *post)
-			external := post.DeepCopy()
 			external.SetName(PayloadProcessingExternalModelPluginsConfigMapForTenant(tenantID))
 			out = append(out, *external)
 		case u.GetKind() == "ServiceAccount" && u.GetName() == PayloadProcessingServiceAccountName(tenantID):
 			out = append(out, *u)
-			post := u.DeepCopy()
-			post.SetNamespace(tenantNamespace)
-			post.SetName(PayloadProcessingPostServiceAccountName(tenantID))
-			out = append(out, *post)
 			external := u.DeepCopy()
 			external.SetNamespace(tenantNamespace)
 			external.SetName(PayloadProcessingExternalModelServiceAccountName(tenantID))
 			out = append(out, *external)
 		case u.GetKind() == "NetworkPolicy" && u.GetName() == PayloadProcessingNetworkPolicyName(tenantID):
-			if err := filterTenantInstanceSelector(u, PayloadPreProcessingDeploymentName(tenantID)); err != nil {
-				return nil, err
-			}
 			out = append(out, *u)
 			post := u.DeepCopy()
 			post.SetNamespace(tenantNamespace)
@@ -169,15 +134,10 @@ func SplitPostAuthResources(resources []unstructured.Unstructured, tenantID, gat
 			out = append(out, *post)
 		case u.GetKind() == "ClusterRoleBinding" && u.GetName() == PayloadProcessingReaderClusterRoleBindingNameForTenant(tenantID):
 			out = append(out, *u)
-			// Do not bind the tenant-local post-auth ExtProc to the shared
+			// Do not bind the tenant-local ExternalModel ExtProc to the shared
 			// MaaS reader ClusterRole. MaaS installations may grant that role
-			// Secret access for the IPP workload. The post-auth workload has no
-			// Kubernetes API contract and must remain unable to read Secrets.
-		case u.GetKind() == "EnvoyFilter" && u.GetName() == PayloadProcessingEnvoyFilterName(tenantID):
-			if err := patchPayloadProcessingEnvoyFilterNamespaces(u, tenantID, gatewayNamespace, tenantNamespace); err != nil {
-				return nil, err
-			}
-			out = append(out, *u)
+			// Secret access for the IPP workload. The ExternalModel workload has
+			// no Kubernetes API contract and must remain unable to read Secrets.
 		default:
 			out = append(out, *u)
 		}
@@ -194,6 +154,7 @@ func RemoveExternalModelResources(resources []unstructured.Unstructured, tenantI
 	service := PayloadProcessingExternalModelServiceName(tenantID)
 	configMap := PayloadProcessingExternalModelPluginsConfigMapForTenant(tenantID)
 	serviceAccount := PayloadProcessingExternalModelServiceAccountName(tenantID)
+	filter := PayloadProcessingExternalModelFilterNameForTenant(tenantID)
 	result := make([]unstructured.Unstructured, 0, len(resources))
 	for i := range resources {
 		u := resources[i]
@@ -201,24 +162,13 @@ func RemoveExternalModelResources(resources []unstructured.Unstructured, tenantI
 			(u.GetKind() == "Service" && u.GetName() == service) ||
 			(u.GetKind() == "ConfigMap" && u.GetName() == configMap) ||
 			(u.GetKind() == "ServiceAccount" && u.GetName() == serviceAccount) ||
-			(u.GetKind() == "DestinationRule" && u.GetName() == service)
+			(u.GetKind() == "DestinationRule" && u.GetName() == service) ||
+			(u.GetKind() == "EnvoyFilter" && u.GetName() == filter)
 		if !remove {
 			result = append(result, u)
 		}
 	}
 	return result
-}
-
-func splitPluginConfigMap(u *unstructured.Unstructured) error {
-	data, found, err := unstructured.NestedStringMap(u.Object, "data")
-	if err != nil {
-		return fmt.Errorf("read plugin ConfigMap data: %w", err)
-	}
-	if !found {
-		return errors.New("plugin ConfigMap data is missing")
-	}
-	delete(data, "extproc.yaml")
-	return unstructured.SetNestedStringMap(u.Object, data, "data")
 }
 
 func keepExternalModelConfig(u *unstructured.Unstructured) error {

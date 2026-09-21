@@ -244,16 +244,15 @@ spec:
             message_timeout: 300s
     # ---------------------------------------------------------------
     # ExternalModel ExtProc is present in the Gateway filter chain but is
-    # disabled at the virtual-host level. The controller adds exact
+    # disabled on every route. The controller adds exact higher-priority
     # HTTP_ROUTE overrides only for its generated ExternalModel routes. This
     # keeps ordinary MaaS/KServe routes on the existing buffered ipp filter.
     # ---------------------------------------------------------------
-    - applyTo: VIRTUAL_HOST
+    - applyTo: HTTP_ROUTE
       match:
         context: GATEWAY
         routeConfiguration:
           vhost:
-            name: ""
             route:
               action: ANY
       patch:

@@ -407,6 +407,7 @@ func (r *Reconciler) cleanupExternalModelResources(ctx context.Context, tenantID
 		{gvkServiceAccount, PayloadProcessingExternalModelServiceAccountName(tenantID), tenantNamespace},
 		{gvkDestinationRule, PayloadProcessingExternalModelServiceName(tenantID), tenantNamespace},
 		{gvkDestinationRule, PayloadProcessingExternalModelServiceName(tenantID), gatewayNamespace},
+		{gvkEnvoyFilter, PayloadProcessingExternalModelFilterNameForTenant(tenantID), gatewayNamespace},
 		{gvkEnvoyFilter, PayloadProcessingExternalModelEnvoyFilterName(tenantID), gatewayNamespace},
 	}
 	for _, target := range targets {
