@@ -154,19 +154,27 @@ _delete_legacy_ipp_in_gateway_namespace() {
   done
   oc delete envoyfilter payload-processing -n "${GATEWAY_NAMESPACE}" --ignore-not-found --wait=false 2>/dev/null || true
   oc delete networkpolicy payload-processing -n "${GATEWAY_NAMESPACE}" --ignore-not-found --wait=false 2>/dev/null || true
+  oc delete serviceaccount payload-processing -n "${GATEWAY_NAMESPACE}" --ignore-not-found --wait=false 2>/dev/null || true
+  oc delete configmap payload-processing-plugins -n "${GATEWAY_NAMESPACE}" --ignore-not-found --wait=false 2>/dev/null || true
+  oc delete clusterrolebinding payload-processing-reader --ignore-not-found --wait=false 2>/dev/null || true
   oc delete hpa -n "${GATEWAY_NAMESPACE}" -l app.kubernetes.io/name=payload-processing --ignore-not-found 2>/dev/null || true
 
   local deadline=$((SECONDS + 120))
   while [[ $SECONDS -lt $deadline ]]; do
     if ! oc get deployment payload-processing -n "${GATEWAY_NAMESPACE}" &>/dev/null \
-      && ! oc get deployment payload-pre-processing -n "${GATEWAY_NAMESPACE}" &>/dev/null; then
-      echo "Legacy IPP Deployments removed from ${GATEWAY_NAMESPACE}"
+      && ! oc get deployment payload-pre-processing -n "${GATEWAY_NAMESPACE}" &>/dev/null \
+      && ! oc get serviceaccount payload-processing -n "${GATEWAY_NAMESPACE}" &>/dev/null \
+      && ! oc get configmap payload-processing-plugins -n "${GATEWAY_NAMESPACE}" &>/dev/null \
+      && ! oc get clusterrolebinding payload-processing-reader &>/dev/null; then
+      echo "Legacy IPP resources removed from ${GATEWAY_NAMESPACE}"
       return 0
     fi
     sleep 2
   done
-  echo "ERROR: legacy IPP Deployments still present in ${GATEWAY_NAMESPACE} after delete" >&2
-  oc get deploy -n "${GATEWAY_NAMESPACE}" | grep payload || true
+  echo "ERROR: legacy IPP resources still present after delete" >&2
+  oc get deployment,service,serviceaccount,configmap,envoyfilter,destinationrule,networkpolicy \
+    -n "${GATEWAY_NAMESPACE}" 2>/dev/null | grep payload || true
+  oc get clusterrolebinding payload-processing-reader 2>/dev/null || true
   return 1
 }
 
