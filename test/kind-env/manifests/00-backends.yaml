@@ -37,7 +37,7 @@ spec:
         image: ghcr.io/nerdalert/llm-katan@sha256:11379a1ec2fd69dc121eada6c544eb423a7c074414507dc1d474f4abba9df75a
         imagePullPolicy: Never
         command: [llm-katan]
-        args: [--model, demo, --backend, echo, --providers, openai, --validate-keys, --api-keys, openai=kind-only-dummy, --tls-cert, /etc/katan/tls/tls.crt, --tls-key, /etc/katan/tls/tls.key]
+        args: [--model, demo, --backend, echo, --providers, openai, --validate-keys, --api-keys, openai=kind-only-dummy, --chunk-delay-ms, "250", --ttft-ms, "100", --itl-ms, "250", --tls-cert, /etc/katan/tls/tls.crt, --tls-key, /etc/katan/tls/tls.key]
         ports: [{name: http, containerPort: 8000}]
         volumeMounts: [{name: provider-a-tls, mountPath: /etc/katan/tls, readOnly: true}]
       volumes: [{name: provider-a-tls, secret: {secretName: provider-a-tls}}]
@@ -110,7 +110,7 @@ spec:
         image: ghcr.io/nerdalert/llm-katan@sha256:11379a1ec2fd69dc121eada6c544eb423a7c074414507dc1d474f4abba9df75a
         imagePullPolicy: Never
         command: [llm-katan]
-        args: [--model, demo, --backend, echo, --providers, openai, --validate-keys, --api-keys, openai=kind-only-dummy, --tls-cert, /etc/katan/tls/tls.crt, --tls-key, /etc/katan/tls/tls.key]
+        args: [--model, demo, --backend, echo, --providers, openai, --validate-keys, --api-keys, openai=kind-only-dummy, --chunk-delay-ms, "250", --ttft-ms, "100", --itl-ms, "250", --tls-cert, /etc/katan/tls/tls.crt, --tls-key, /etc/katan/tls/tls.key]
         ports: [{name: http, containerPort: 8000}]
         volumeMounts: [{name: provider-b-tls, mountPath: /etc/katan/tls, readOnly: true}]
       volumes: [{name: provider-b-tls, secret: {secretName: provider-b-tls}}]

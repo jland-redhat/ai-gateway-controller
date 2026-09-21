@@ -16,6 +16,12 @@ EXT_SERVICE=payload-processing-external-model
 EXT_CONFIG=payload-processing-external-model-plugins
 mkdir -p "$EVIDENCE"
 exec > >(tee "$EVIDENCE/e2e.log") 2>&1
+evidence_label() {
+  case "$1" in
+    "$ROOT"/*) printf '%s\n' "${1#"$ROOT"/}" ;;
+    *) printf '%s\n' 'run-evidence' ;;
+  esac
+}
 kctl() { kubectl --context "kind-$CLUSTER" "$@"; }
 
 RESULTS="$EVIDENCE/results.json"
@@ -28,6 +34,9 @@ ACTIVE_ASSERTION=""
 CA_CERT=""
 AUTH_CFG=""
 ADMIN_CFG=""
+OVERRIDE_SECRET='provider-model-override-credentials'
+MODEL_OVERRIDE_ACTIVE=false
+DUPLICATE_ACTIVE=false
 RECOMPUTE="$EVIDENCE/recompute-digest"
 go build -o "$RECOMPUTE" "$ROOT/test/kind-env/recompute_digest.go"
 
@@ -79,6 +88,15 @@ revoke_key() {
 finish() {
   local rc=$?
   set +e
+  if [[ "$DUPLICATE_ACTIVE" == true ]]; then
+    timeout 20s kubectl --context "kind-$CLUSTER" -n "$NS" patch externalmodel demo-model --type=json \
+      -p='[{"op":"remove","path":"/spec/externalProviderRefs/2"}]' >/dev/null 2>&1 || true
+  fi
+  if [[ "$MODEL_OVERRIDE_ACTIVE" == true ]]; then
+    timeout 20s kubectl --context "kind-$CLUSTER" -n "$NS" patch externalmodel demo-model --type=json \
+      -p='[{"op":"remove","path":"/spec/externalProviderRefs/0/auth"}]' >/dev/null 2>&1 || true
+  fi
+  timeout 20s kubectl --context "kind-$CLUSTER" -n "$NS" delete secret "$OVERRIDE_SECRET" --ignore-not-found >/dev/null 2>&1 || true
   [[ -n "$APF" ]] && kill "$APF" 2>/dev/null || true
   [[ -n "$GPF" ]] && kill "$GPF" 2>/dev/null || true
   revoke_key
@@ -119,29 +137,86 @@ identity() {
 overlay_state() {
   local cm="$TMP_DIR/overlay.json" content_file="$TMP_DIR/content.json" mounted="$TMP_DIR/mounted.json"
   kctl -n "$NS" get configmap routing-overlay -o json >"$cm"
-  kctl -n "$NS" exec "deploy/$EXT_DEPLOYMENT" -- cat /etc/praxis/routing/routing-overlay.json >"$mounted" 2>/dev/null || true
-  local declared generation recomputed mounted_digest
+  timeout 5s kubectl --context "kind-$CLUSTER" -n "$NS" exec "deploy/$EXT_DEPLOYMENT" -- cat /etc/praxis/routing/routing-overlay.json >"$mounted" 2>/dev/null || true
+  local declared generation recomputed mounted_digest serving_revision accepted_revision
   jq -r '.data["routing-overlay.json"] // empty' "$cm" >"$content_file"
   declared=$(jq -r '.metadata.annotations["inference.opendatahub.io/routing-overlay-content-digest"]' "$cm")
   generation=$(jq -r '.metadata.annotations["inference.opendatahub.io/routing-overlay-source-generation"]' "$cm")
   recomputed=$("$RECOMPUTE" "$content_file" 2>/dev/null || true)
   mounted_digest=$("$RECOMPUTE" "$mounted" 2>/dev/null || true)
-  printf 'generation=%s declared=%s recomputed=%s mounted=%s a=%s b=%s\n' "$generation" "$declared" "$recomputed" "$mounted_digest" "$(jq -r '.data["routing-overlay.json"]' "$cm"|grep -q provider-provider-a&&echo true||echo false)" "$(jq -r '.data["routing-overlay.json"]' "$cm"|grep -q provider-provider-b&&echo true||echo false)"
+  serving_revision=$(timeout 5s kubectl --context "kind-$CLUSTER" -n "$NS" logs "deploy/$EXT_DEPLOYMENT" --tail=100 2>/dev/null |
+    rg 'accepted_revision' | tail -1 | grep -oE '[0-9a-f]{64}' | head -2 | tr '\n' ' ' || true)
+  accepted_revision=$(awk '{print $1}' <<<"$serving_revision")
+  serving_revision=$(awk '{print $2}' <<<"$serving_revision")
+  printf 'generation=%s declared=%s recomputed=%s mounted=%s accepted=%s serving=%s a=%s b=%s\n' "$generation" "$declared" "$recomputed" "$mounted_digest" "$accepted_revision" "$serving_revision" "$(jq -r '.data["routing-overlay.json"]' "$cm"|grep -q provider-provider-a&&echo true||echo false)" "$(jq -r '.data["routing-overlay.json"]' "$cm"|grep -q provider-provider-b&&echo true||echo false)"
+}
+
+field_value() {
+  local key=$1 state=$2 part
+  for part in $state; do
+    if [[ "$part" == "$key="* ]]; then
+      printf '%s\n' "${part#*=}"
+      return 0
+    fi
+  done
+  return 1
 }
 
 wait_overlay() {
-  local wanted=$1 stable=0 a b
+  local wanted=$1 stable=0 a b active_other declared recomputed mounted accepted serving
   for _ in $(seq 1 90); do
     a=$(overlay_state)
-    local active_other
     if [[ "$wanted" == a ]]; then active_other=b; else active_other=a; fi
+    declared=$(field_value declared "$a" || true)
+    recomputed=$(field_value recomputed "$a" || true)
+    mounted=$(field_value mounted "$a" || true)
+    accepted=$(field_value accepted "$a" || true)
+    serving=$(field_value serving "$a" || true)
     if [[ "$a" == *" $wanted=true"* && "$a" == *" $active_other=false"* &&
-      "$(awk '{print $2}'<<<"$a"|cut -d= -f2)" == "$(awk '{print $3}'<<<"$a"|cut -d= -f2)" &&
-      "$(awk '{print $2}'<<<"$a"|cut -d= -f2)" == "$(awk '{print $4}'<<<"$a"|cut -d= -f2)" ]]; then
+      -n "$declared" && "$declared" == "$recomputed" && "$declared" == "$mounted" &&
+      "$declared" == "$accepted" && "$declared" == "$serving" ]]; then
       sleep 2
       b=$(overlay_state)
       if [[ "$a" == "$b" ]]; then
         stable=$((stable+1)); printf '%s\n' "$b" >"$EVIDENCE/overlay-$wanted-$stable.txt"
+        [[ "$stable" -ge 2 ]] && return 0
+      else stable=0; fi
+    else stable=0; fi
+    sleep 2
+  done
+  return 1
+}
+
+last_known_good_state() {
+  local wanted=$1 mounted="$TMP_DIR/lkg-mounted.json" serving_revision accepted_revision
+  timeout 5s kubectl --context "kind-$CLUSTER" -n "$NS" exec "deploy/$EXT_DEPLOYMENT" -- \
+    cat /etc/praxis/routing/routing-overlay.json >"$mounted" 2>/dev/null || true
+  local mounted_digest active_wanted active_other
+  mounted_digest=$("$RECOMPUTE" "$mounted" 2>/dev/null || true)
+  active_wanted=$(jq -e --arg cluster "provider-provider-$wanted" '.overlay.candidates[]?.cluster == $cluster' "$mounted" >/dev/null 2>&1 && echo true || echo false)
+  active_other=$(jq -e --arg cluster "provider-provider-$([[ "$wanted" == a ]] && echo b || echo a)" '.overlay.candidates[]?.cluster == $cluster' "$mounted" >/dev/null 2>&1 && echo true || echo false)
+  serving_revision=$(timeout 5s kubectl --context "kind-$CLUSTER" -n "$NS" logs "deploy/$EXT_DEPLOYMENT" --tail=100 2>/dev/null |
+    rg 'accepted_revision' | tail -1 | grep -oE '[0-9a-f]{64}' | head -2 | tr '\n' ' ' || true)
+  accepted_revision=$(awk '{print $1}' <<<"$serving_revision")
+  serving_revision=$(awk '{print $2}' <<<"$serving_revision")
+  printf 'mounted=%s accepted=%s serving=%s wanted=%s other=%s\n' \
+    "$mounted_digest" "$accepted_revision" "$serving_revision" "$active_wanted" "$active_other"
+}
+
+wait_last_known_good() {
+  local wanted=$1 expected_digest=$2 stable=0 a b mounted accepted serving
+  for _ in $(seq 1 90); do
+    a=$(last_known_good_state "$wanted")
+    mounted=$(field_value mounted "$a" || true)
+    accepted=$(field_value accepted "$a" || true)
+    serving=$(field_value serving "$a" || true)
+    if [[ "$a" == *" wanted=true"* && "$a" == *" other=false"* &&
+      "$mounted" == "$expected_digest" && "$accepted" == "$expected_digest" &&
+      "$serving" == "$expected_digest" ]]; then
+      sleep 2
+      b=$(last_known_good_state "$wanted")
+      if [[ "$a" == "$b" ]]; then
+        stable=$((stable+1)); printf '%s\n' "$b" >"$EVIDENCE/last-known-good-$stable.txt"
         [[ "$stable" -ge 2 ]] && return 0
       else stable=0; fi
     else stable=0; fi
@@ -217,6 +292,71 @@ status_assert() {
   [[ "$got" == "$expected" ]] && record "$n" "$name" PASS "http=$got" || record "$n" "$name" FAIL "expected=$expected observed=$got"
 }
 
+wait_model_phase() {
+  local wanted=$1 phase
+  for _ in $(seq 1 90); do
+    phase=$(kctl -n "$NS" get externalmodel demo-model -o jsonpath='{.status.phase}' 2>/dev/null || true)
+    [[ "$phase" == "$wanted" ]] && return 0
+    sleep 2
+  done
+  return 1
+}
+
+gateway_body() {
+  local name=$1 cfg=$2 path_model=$3 body_model=$4 extra=${5:-}
+  local body="$TMP_DIR/$name.json" raw="$TMP_DIR/$name.raw"
+  printf '{"model":"%s","messages":[{"role":"user","content":"hello"}]}' "$body_model" >"$body"
+  if [[ -n "$extra" ]]; then
+    timeout 30s curl --noproxy '*' -sS --max-time 20 -o "$raw" -w '%{http_code}' \
+      --config "$cfg" --config "$extra" -H 'content-type: application/json' \
+      --data-binary @"$body" "http://127.0.0.1:$GATEWAY_PORT/$NS/$path_model/v1/chat/completions" \
+      >"$TMP_DIR/$name.status" 2>/dev/null || true
+  else
+    timeout 30s curl --noproxy '*' -sS --max-time 20 -o "$raw" -w '%{http_code}' \
+      --config "$cfg" -H 'content-type: application/json' --data-binary @"$body" \
+      "http://127.0.0.1:$GATEWAY_PORT/$NS/$path_model/v1/chat/completions" \
+      >"$TMP_DIR/$name.status" 2>/dev/null || true
+  fi
+  sanitize "$raw" "$EVIDENCE/$name-response.json"
+  cat "$TMP_DIR/$name.status"
+}
+
+stream_request() {
+  local trace="$EVIDENCE/stream-timing.txt" body="$TMP_DIR/stream.json" curl_rc
+  printf '%s\n' '{"model":"demo","messages":[{"role":"user","content":"stream"}],"stream":true}' >"$body"
+  set +e
+  timeout 45s curl --noproxy '*' --no-buffer -sS --connect-timeout 5 --max-time 40 \
+    --config "$AUTH_CFG" -H 'content-type: application/json' --data-binary @"$body" \
+    -w '\n__STATUS__%{http_code}\n' "http://127.0.0.1:$GATEWAY_PORT/$NS/demo/v1/chat/completions" \
+    2>"$TMP_DIR/stream.err" |
+    python3 -c 'import sys,time; n=0; first=None; last=None; status=""; started=time.monotonic();
+for raw in sys.stdin:
+    line=raw.strip()
+    if line.startswith("__STATUS__"): status=line.removeprefix("__STATUS__")
+    elif line.startswith("data:") and line != "data: [DONE]":
+        n += 1; elapsed=(time.monotonic()-started)*1000
+        if first is None: first=elapsed
+        last=elapsed
+        print(f"chunk={n} elapsed_ms={elapsed:.0f}")
+print(f"chunks={n} first_ms={first or 0:.0f} last_ms={last or 0:.0f} status={status}")' >"$trace"
+  curl_rc=${PIPESTATUS[0]}
+  set -e
+  printf 'curl_rc=%s\n' "$curl_rc" >>"$trace"
+  cat "$trace"
+}
+
+provider_request_count() {
+  local deployment=$1
+  timeout 5s kubectl --context "kind-$CLUSTER" -n "$API_NS" logs "deploy/$deployment" --tail=300 2>/dev/null |
+    rg -c 'POST /v1/chat/completions' || true
+}
+
+write_model_override_secret() {
+  kctl -n "$NS" create secret generic "$OVERRIDE_SECRET" \
+    --from-literal=api-key=kind-only-dummy --dry-run=client -o yaml |
+    kctl apply -f - >/dev/null
+}
+
 finalize_results() {
   local failed
   failed=$(jq '[.assertions[] | select(.result != "PASS")] | length' "$RESULTS")
@@ -230,7 +370,7 @@ finalize_results() {
 }
 
 echo "cluster=$CLUSTER"
-echo "evidence=$EVIDENCE"
+echo "evidence=$(evidence_label "$EVIDENCE")"
 standalone=true
 for r in deployments/praxis services/praxis configmaps/praxis-config; do kctl get "$r" -A >/dev/null 2>&1 && standalone=false; done
 [[ "$standalone" == true ]] && record 1 standalone_praxis_absent PASS "resources_absent=true" || record 1 standalone_praxis_absent FAIL "resources_present=true"
@@ -308,7 +448,114 @@ kctl -n "$NS" get externalmodel demo-model -o json|jq 'del(.metadata.resourceVer
 noop_after=$(kctl -n "$NS" get configmap routing-overlay -o json|jq -c '{generation:.metadata.generation,resourceVersion:.metadata.resourceVersion,digest:.metadata.annotations["inference.opendatahub.io/routing-overlay-content-digest"],data:.data["routing-overlay.json"]}')
 [[ "$noop_before" == "$noop_after" ]]&&record 21 semantic_noop PASS "unchanged=true"||record 21 semantic_noop FAIL "changed=true"
 valid="$TMP_DIR/valid.json"; kctl -n "$NS" get cm routing-overlay -o jsonpath='{.data.routing-overlay\.json}'>"$valid"; kctl -n "$NS" get cm routing-overlay -o json|jq '.data["routing-overlay.json"]="{invalid-overlay"'|kctl apply -f - >/dev/null; sleep 5
-lkg=$(gateway last_known_good "$AUTH_CFG"); status_assert 22 last_known_good 200 "$lkg"; kctl -n "$NS" get cm routing-overlay -o json|jq --rawfile overlay "$valid" '.data["routing-overlay.json"]=$overlay'|kctl apply -f - >/dev/null; wait_overlay a&&record 23 valid_recovery PASS "stable=true"||record 23 valid_recovery FAIL "stable=false"
+valid_digest=$("$RECOMPUTE" "$valid")
+ACTIVE_ASSERTION=last_known_good
+if ! wait_last_known_good a "$valid_digest"; then
+  record 22 last_known_good FAIL "convergence=false"
+  exit 1
+fi
+lkg=$(gateway last_known_good "$AUTH_CFG")
+if [[ "$lkg" == 200 ]]; then record 22 last_known_good PASS "converged=true http=200"; else record 22 last_known_good FAIL "converged=true expected=http=200 observed=$lkg"; fi
+kctl -n "$NS" get cm routing-overlay -o json|jq --rawfile overlay "$valid" '.data["routing-overlay.json"]=$overlay'|kctl apply -f - >/dev/null; wait_overlay a&&record 23 valid_recovery PASS "stable=true"||record 23 valid_recovery FAIL "stable=false"
+stream_result=$(stream_request)
+printf '%s\n' "$stream_result" >"$EVIDENCE/stream-observed.txt"
+stream_status=$(awk -F'status=' '/chunks=/{print $2}' "$EVIDENCE/stream-timing.txt" | tail -1)
+stream_chunks=$(awk -F'[ =]' '/chunks=/{print $2}' "$EVIDENCE/stream-timing.txt" | tail -1)
+stream_first=$(awk -F'[ =]' '/chunks=/{print $4}' "$EVIDENCE/stream-timing.txt" | tail -1)
+stream_last=$(awk -F'[ =]' '/chunks=/{print $6}' "$EVIDENCE/stream-timing.txt" | tail -1)
+if [[ "$stream_status" == 200 && "$stream_chunks" =~ ^[0-9]+$ && "$stream_chunks" -ge 2 &&
+  "$stream_first" =~ ^[0-9]+$ && "$stream_last" =~ ^[0-9]+$ && "$stream_last" -gt "$stream_first" ]]; then
+  record 27 streaming_two_chunks PASS "http=200 chunks=$stream_chunks first_ms=$stream_first last_ms=$stream_last"
+else
+  record 27 streaming_two_chunks FAIL "expected=http=200 chunks>=2 delayed=true observed=$(tr '\n' ' ' <"$EVIDENCE/stream-timing.txt")"
+fi
+
+write_model_override_secret
+kctl -n "$NS" patch externalmodel demo-model --type=json -p='[{"op":"add","path":"/spec/externalProviderRefs/0/auth","value":{"type":"apikey","secretRef":{"name":"provider-model-override-credentials"}}}]' >/dev/null
+MODEL_OVERRIDE_ACTIVE=true
+override_ready=false
+if wait_model_phase Ready && wait_overlay a; then override_ready=true; fi
+override_ref=$(kctl -n "$NS" exec "deploy/$EXT_DEPLOYMENT" -- cat /etc/praxis/routing/routing-overlay.json 2>/dev/null |
+  jq -r '.overlay.candidates[]? | select(.cluster=="provider-provider-a") | .credential.secretRef.name' 2>/dev/null || true)
+config_override_ref=$(kctl -n "$NS" get configmap "$EXT_CONFIG" -o jsonpath='{.data.extproc\.yaml}' 2>/dev/null | grep -o "$OVERRIDE_SECRET" | head -1 || true)
+volume_override_ref=$(kctl -n "$NS" get deploy "$EXT_DEPLOYMENT" -o json 2>/dev/null |
+  jq -r --arg secret "$OVERRIDE_SECRET" '[.spec.template.spec.volumes[]?.projected.sources[]?.secret.name] | any(.==$secret)' 2>/dev/null || true)
+printf 'overlay_secret_ref=%s extproc_config_reference=%s deployment_secret_projection=%s\n' "$override_ref" "$config_override_ref" "$volume_override_ref" >"$EVIDENCE/model-override-references.txt"
+if [[ "$override_ready" == true && "$override_ref" == "$OVERRIDE_SECRET" && -n "$config_override_ref" && "$volume_override_ref" == true ]]; then
+  override_request=$(gateway provider_a_model_override "$AUTH_CFG")
+  status_assert 28 model_level_credential_override 200 "$override_request"
+else
+  record 28 model_level_credential_override FAIL "ready=$override_ready overlay_secret_ref=$override_ref config_reference=$([[ -n "$config_override_ref" ]] && echo true || echo false) projection=$volume_override_ref"
+fi
+override_digest=$(field_value declared "$(overlay_state)" || true)
+kctl -n "$NS" delete secret "$OVERRIDE_SECRET" --ignore-not-found >/dev/null
+kctl -n "$NS" annotate externalmodel demo-model "external-model-e2e/override-probe=$(date +%s)" --overwrite >/dev/null
+override_failed=false
+if wait_model_phase Failed; then override_failed=true; fi
+after_delete_digest=$(field_value declared "$(overlay_state)" || true)
+printf 'phase_failed=%s prior_digest=%s after_delete_digest=%s\n' "$override_failed" "$override_digest" "$after_delete_digest" >"$EVIDENCE/model-override-failure.txt"
+if [[ "$override_failed" == true && "$after_delete_digest" == "$override_digest" ]]; then
+  record 29 model_override_missing_fails_closed PASS "phase=Failed serving_digest_unchanged=true"
+else
+  record 29 model_override_missing_fails_closed FAIL "phase_failed=$override_failed serving_digest_unchanged=$([[ "$after_delete_digest" == "$override_digest" ]] && echo true || echo false)"
+fi
+write_model_override_secret
+recovered=false
+if wait_model_phase Ready && wait_overlay a; then recovered=true; fi
+if [[ "$recovered" == true ]]; then
+  recovered_request=$(gateway provider_a_model_override_recovery "$AUTH_CFG")
+  [[ "$recovered_request" == 200 ]] && record 30 model_override_recovery PASS "http=200" || record 30 model_override_recovery FAIL "expected=http=200 observed=$recovered_request"
+else
+  record 30 model_override_recovery FAIL "ready=false"
+fi
+kctl -n "$NS" patch externalmodel demo-model --type=json -p='[{"op":"remove","path":"/spec/externalProviderRefs/0/auth"}]' >/dev/null
+MODEL_OVERRIDE_ACTIVE=false
+kctl -n "$NS" delete secret "$OVERRIDE_SECRET" --ignore-not-found >/dev/null
+if wait_model_phase Ready && wait_overlay a; then record 31 model_override_cleanup PASS "restored_provider_credentials=true"; else record 31 model_override_cleanup FAIL "convergence=false"; exit 1; fi
+
+duplicate_before=$(field_value declared "$(overlay_state)" || true)
+duplicate_ref=$(kctl -n "$NS" get externalmodel demo-model -o json | jq -c '.spec.externalProviderRefs[0] | .weight=1')
+jq -n --argjson value "$duplicate_ref" '[{"op":"add","path":"/spec/externalProviderRefs/-","value":$value}]' >"$TMP_DIR/duplicate-patch.json"
+kctl -n "$NS" patch externalmodel demo-model --type=json --patch-file "$TMP_DIR/duplicate-patch.json" >/dev/null
+DUPLICATE_ACTIVE=true
+duplicate_failed=false
+if wait_model_phase Failed; then duplicate_failed=true; fi
+duplicate_after=$(field_value declared "$(overlay_state)" || true)
+printf 'phase_failed=%s prior_digest=%s after_digest=%s\n' "$duplicate_failed" "$duplicate_before" "$duplicate_after" >"$EVIDENCE/duplicate-provider-binding.txt"
+if [[ "$duplicate_failed" == true && "$duplicate_after" == "$duplicate_before" ]]; then
+  record 32 duplicate_active_provider_binding_rejected PASS "phase=Failed serving_digest_unchanged=true"
+else
+  record 32 duplicate_active_provider_binding_rejected FAIL "phase_failed=$duplicate_failed serving_digest_unchanged=$([[ "$duplicate_after" == "$duplicate_before" ]] && echo true || echo false)"
+fi
+kctl -n "$NS" patch externalmodel demo-model --type=json -p='[{"op":"remove","path":"/spec/externalProviderRefs/2"}]' >/dev/null
+DUPLICATE_ACTIVE=false
+if wait_model_phase Ready && wait_overlay a; then record 33 duplicate_binding_recovery PASS "restored=true"; else record 33 duplicate_binding_recovery FAIL "convergence=false"; exit 1; fi
+
+preauth_before=$(provider_request_count katan-a)
+kctl -n "$API_NS" scale deployment/payload-pre-processing --replicas=0 >/dev/null
+preauth_stopped=false
+for _ in $(seq 1 60); do
+  ready=$(kctl -n "$API_NS" get deployment/payload-pre-processing -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true)
+  if [[ -z "$ready" || "$ready" == 0 ]]; then preauth_stopped=true; break; fi
+  sleep 1
+done
+conflict_model_cfg="$TMP_DIR/conflict-model.cfg"; printf '%s\n' 'header = "X-Gateway-Model-Name: demo"' >"$conflict_model_cfg"
+trust_status=$(gateway_body preauth_unavailable "$AUTH_CFG" demo unauthorized-model "$conflict_model_cfg")
+preauth_after=$(provider_request_count katan-a)
+printf 'preauth_stopped=%s http=%s provider_requests_before=%s provider_requests_after=%s\n' "$preauth_stopped" "$trust_status" "$preauth_before" "$preauth_after" >"$EVIDENCE/preauth-unavailable.txt"
+if [[ "$preauth_stopped" == true && "$trust_status" != 200 && "$preauth_before" == "$preauth_after" ]]; then
+  record 34 preauth_unavailable_trust_boundary PASS "http=$trust_status provider_contact=false"
+else
+  record 34 preauth_unavailable_trust_boundary FAIL "stopped=$preauth_stopped http=$trust_status provider_contact=$([[ "$preauth_before" == "$preauth_after" ]] && echo false || echo true)"
+fi
+kctl -n "$API_NS" scale deployment/payload-pre-processing --replicas=1 >/dev/null
+preauth_restored=false
+for _ in $(seq 1 90); do
+  ready=$(kctl -n "$API_NS" get deployment/payload-pre-processing -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true)
+  if [[ "$ready" == 1 ]]; then preauth_restored=true; break; fi
+  sleep 1
+done
+[[ "$preauth_restored" == true ]] && record 35 preauth_restored PASS "ready_replicas=1" || record 35 preauth_restored FAIL "ready_replicas=${ready:-0}"
 POST_SA=$(kctl -n "$NS" get "deployment/$EXT_DEPLOYMENT" -o jsonpath='{.spec.template.spec.serviceAccountName}' 2>/dev/null || true)
 printf 'serviceAccount=%s\n' "$POST_SA" >"$EVIDENCE/post-auth-service-account.txt"
 if [[ "$POST_SA" != "$EXT_DEPLOYMENT" ]]; then
@@ -317,6 +564,6 @@ else
   can=$(kctl auth can-i get secrets --as="system:serviceaccount:$NS:$POST_SA" 2>/dev/null||true)
   [[ "$can" == no ]]&&record 24 secret_api_denied PASS "service_account=$POST_SA can_i=no"||record 24 secret_api_denied FAIL "service_account=$POST_SA can_i=$can"
 fi
-if ! rg -n -i '(authorization:|bearer[[:space:]]+[A-Za-z0-9._-]{12,}|api[_-]?key[=:][[:space:]]*[A-Za-z0-9._-]{12,})' "$EVIDENCE" --glob '!e2e.log' --glob '!*.err' >/dev/null 2>&1; then record 25 credential_scan PASS "clean=true"; else record 25 credential_scan FAIL "clean=false"; fi
-revoke_key; [[ "$KEY_REVOKED" == true ]]&&record 26 key_revoked PASS "key_id=$KEY_ID"||record 26 key_revoked FAIL "revoked=false"
+if ! rg -n -i '(authorization:|bearer[[:space:]]+[A-Za-z0-9._-]{12,}|api[_-]?key[=:][[:space:]]*[A-Za-z0-9._-]{12,})' "$EVIDENCE" --glob '!e2e.log' --glob '!*.err' >/dev/null 2>&1; then record 36 credential_scan PASS "clean=true"; else record 36 credential_scan FAIL "clean=false"; fi
+revoke_key; [[ "$KEY_REVOKED" == true ]]&&record 37 key_revoked PASS "key_id=$KEY_ID"||record 37 key_revoked FAIL "revoked=false"
 finalize_results

@@ -100,12 +100,26 @@ func TestEnableExternalModelRoutesScopesHeaderPhaseFilterToGeneratedRoutes(t *te
 		if err != nil || !found {
 			t.Fatalf("route %q overrides=%#v found=%t err=%v, want supported enable override", match, overrides, found, err)
 		}
-		if mode, found, err := unstructured.NestedMap(overrides, "processing_mode"); err != nil || !found || mode["request_header_mode"] != "SEND" || mode["request_body_mode"] != "NONE" {
+		mode, found, err := unstructured.NestedMap(overrides, "processing_mode")
+		if err != nil || !found || mode["request_header_mode"] != "SEND" ||
+			mode["request_body_mode"] != "NONE" || mode["response_body_mode"] != "NONE" {
 			t.Fatalf("route %q processing mode=%#v found=%t err=%v, want SEND/NONE", match, mode, found, err)
 		}
 		sharedDisabled, found, err := unstructured.NestedBool(patch, "patch", "value", "typed_per_filter_config", "envoy.filters.http.ext_proc.ipp", "disabled")
 		if err != nil || !found || !sharedDisabled {
 			t.Fatalf("route %q shared ipp disabled=%t found=%t err=%v, want disabled", match, sharedDisabled, found, err)
+		}
+		preOverrides, found, err := unstructured.NestedMap(patch, "patch", "value", "typed_per_filter_config", externalModelPreExtProcFilter, "overrides")
+		if err != nil || !found {
+			t.Fatalf("route %q pre-auth overrides=%#v found=%t err=%v, want fail-closed ExternalModel pre-auth", match, preOverrides, found, err)
+		}
+		preMode, found, err := unstructured.NestedMap(preOverrides, "processing_mode")
+		if err != nil || !found || preMode["request_body_mode"] != "BUFFERED" {
+			t.Fatalf("route %q pre-auth processing mode=%#v found=%t err=%v, want BUFFERED", match, preMode, found, err)
+		}
+		preDisabled, found, err := unstructured.NestedBool(patch, "patch", "value", "typed_per_filter_config", "envoy.filters.http.ext_proc.ipp-pre", "disabled")
+		if err != nil || !found || !preDisabled {
+			t.Fatalf("route %q shared pre-auth disabled=%t found=%t err=%v, want disabled", match, preDisabled, found, err)
 		}
 	}
 	// A stale route-level enablement is removed before new route patches are
@@ -414,7 +428,6 @@ func TestValidateProviderAuthenticationStrategies(t *testing.T) {
 		want       string
 	}{
 		{name: "apikey", authType: "apikey", secretData: map[string][]byte{"api-key": []byte("fixture")}},
-		{name: "missing api key", authType: "apikey", secretData: map[string][]byte{"other": []byte("fixture")}, want: "missing key api-key"},
 		{name: "sigv4 unsupported", authType: "sigv4", secretData: map[string][]byte{"api-key": []byte("fixture")}, want: "unsupported authentication strategy"},
 		{name: "oauth2 unsupported", authType: "oauth2", secretData: map[string][]byte{"api-key": []byte("fixture")}, want: "unsupported authentication strategy"},
 		{name: "unknown unsupported", authType: "custom", secretData: map[string][]byte{"api-key": []byte("fixture")}, want: "unsupported authentication strategy"},
@@ -705,6 +718,22 @@ func TestReconcileCreatesTransportAndOverlayFromOneRouteSet(t *testing.T) {
 	}
 }
 
+func TestValidateResolvedCredentialsUsesEffectiveModelOverride(t *testing.T) {
+	base := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "provider-default", Namespace: "tenant-a"}, Data: map[string][]byte{"api-key": []byte("default")}}
+	r := controllerTestClient(t, base)
+	route := resolver.Route{Model: "model", Provider: "provider", Namespace: "tenant-a", AuthType: "apikey", SecretName: "model-override", SecretKey: "api-key"}
+	if err := r.validateResolvedCredentials(context.Background(), []resolver.Route{route}); err == nil || !strings.Contains(err.Error(), "model-override") {
+		t.Fatalf("validateResolvedCredentials() error = %v, want missing effective override Secret", err)
+	}
+	override := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "model-override", Namespace: "tenant-a"}, Data: map[string][]byte{"api-key": []byte("override")}}
+	if err := r.Create(context.Background(), override); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.validateResolvedCredentials(context.Background(), []resolver.Route{route}); err != nil {
+		t.Fatalf("validateResolvedCredentials() = %v, want effective override accepted", err)
+	}
+}
+
 func TestReconcileRecoversProviderAfterSecretDeletionAndRestoration(t *testing.T) {
 	provider := &v1alpha1.ExternalProvider{
 		ObjectMeta: metav1.ObjectMeta{Name: "provider", Namespace: "tenant-a", UID: "provider-uid"},
@@ -744,8 +773,8 @@ func TestReconcileRecoversProviderAfterSecretDeletionAndRestoration(t *testing.T
 	if err := r.Delete(context.Background(), secret); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.Reconcile(context.Background(), req); !errors.Is(err, resolver.ErrNoRoutes) {
-		t.Fatalf("missing-secret reconcile error = %v, want %v", err, resolver.ErrNoRoutes)
+	if _, err := r.Reconcile(context.Background(), req); !errors.Is(err, errCredentialNotReady) {
+		t.Fatalf("missing-secret reconcile error = %v, want credential-not-ready", err)
 	}
 	var after corev1.ConfigMap
 	if err := r.Get(context.Background(), client.ObjectKey{Namespace: "tenant-a", Name: "routing-overlay"}, &after); err != nil {

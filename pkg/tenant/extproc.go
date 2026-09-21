@@ -20,7 +20,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	v1alpha1 "github.com/opendatahub-io/ai-gateway-controller/api/inference/v1alpha1"
+	"github.com/opendatahub-io/ai-gateway-controller/pkg/envelope"
 )
 
 const extprocCredentialDir = "/etc/praxis/credentials" //nolint:gosec // fixed non-secret mount path
@@ -29,6 +29,7 @@ type extprocCredential struct {
 	name      string
 	namespace string
 	key       string
+	strategy  string
 	file      string
 }
 
@@ -37,12 +38,12 @@ type extprocCredential struct {
 // MaaS/KServe post-auth workload is intentionally not modified. Secret values
 // are never read: kubelet projects the referenced Secret into this workload and
 // credential_inject reads the mounted file at request time.
-func configureExternalModelExtProc(resources []unstructured.Unstructured, namespace string, providers []v1alpha1.ExternalProvider) error {
-	credentials, err := extprocCredentials(namespace, providers)
+func configureExternalModelExtProc(resources []unstructured.Unstructured, namespace string, candidates []envelope.Candidate) error {
+	credentials, err := extprocCredentials(namespace, candidates)
 	if err != nil {
 		return err
 	}
-	config := extprocPostAuthConfig(providers, credentials)
+	config := extprocPostAuthConfig(candidates, credentials)
 
 	var configMap *unstructured.Unstructured
 	var deployment *unstructured.Unstructured
@@ -82,7 +83,12 @@ func configureExternalModelExtProc(resources []unstructured.Unstructured, namesp
 		return fmt.Errorf("read post-auth ExtProc volumes: %w", err)
 	}
 	projectedSources := make([]any, 0, len(credentials))
+	projectedFiles := map[string]bool{}
 	for _, credential := range credentials {
+		if projectedFiles[credential.file] {
+			continue
+		}
+		projectedFiles[credential.file] = true
 		projectedSources = append(projectedSources, map[string]any{
 			"secret": map[string]any{
 				"name":  credential.name,
@@ -126,34 +132,46 @@ func configureExternalModelExtProc(resources []unstructured.Unstructured, namesp
 }
 
 // extprocCredentials returns deterministic, reference-only file mappings.
-func extprocCredentials(namespace string, providers []v1alpha1.ExternalProvider) ([]extprocCredential, error) {
+func extprocCredentials(namespace string, candidates []envelope.Candidate) ([]extprocCredential, error) {
 	seen := map[string]bool{}
-	credentials := make([]extprocCredential, 0, len(providers))
-	for _, provider := range providers {
-		if provider.Namespace != "" && provider.Namespace != namespace {
-			return nil, fmt.Errorf("provider %s/%s references a cross-namespace Secret", provider.Namespace, provider.Name)
-		}
-		if provider.Spec.Auth.Type != "" && provider.Spec.Auth.Type != "apikey" {
-			return nil, fmt.Errorf("provider %s uses unsupported ExtProc credential type %q", provider.Name, provider.Spec.Auth.Type)
-		}
-		name := provider.Spec.Auth.SecretRef.Name
-		if name == "" || seen[name] {
+	credentials := make([]extprocCredential, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.Credential == nil {
 			continue
 		}
-		seen[name] = true
-		key := "api-key"
-		hash := sha256.Sum256([]byte(namespace + "/" + name + "/" + key))
-		path := fmt.Sprintf("%s/%s-%s/%s", extprocCredentialDir, name, hex.EncodeToString(hash[:])[:12], key)
-		credentials = append(credentials, extprocCredential{name: name, namespace: namespace, key: key, file: path})
+		ref := candidate.Credential.SecretRef
+		if ref.Namespace != namespace {
+			return nil, fmt.Errorf("candidate %s references cross-namespace Secret %s/%s", candidate.StableID, ref.Namespace, ref.Name)
+		}
+		if candidate.Credential.Strategy != "bearer_token" && candidate.Credential.Strategy != "apikey" {
+			return nil, fmt.Errorf("candidate %s uses unsupported ExtProc credential strategy %q", candidate.StableID, candidate.Credential.Strategy)
+		}
+		if ref.Name == "" || ref.Key == "" {
+			return nil, fmt.Errorf("candidate %s has an incomplete credential reference", candidate.StableID)
+		}
+		identity := ref.Namespace + "/" + ref.Name + "/" + ref.Key + "/" + candidate.Credential.Strategy
+		if seen[identity] {
+			continue
+		}
+		seen[identity] = true
+		hash := sha256.Sum256([]byte(ref.Namespace + "/" + ref.Name + "/" + ref.Key))
+		path := fmt.Sprintf("%s/%s-%s/%s", extprocCredentialDir, ref.Name, hex.EncodeToString(hash[:])[:12], ref.Key)
+		credentials = append(credentials, extprocCredential{name: ref.Name, namespace: ref.Namespace, key: ref.Key, strategy: candidate.Credential.Strategy, file: path})
 	}
-	sort.Slice(credentials, func(i, j int) bool { return credentials[i].name < credentials[j].name })
+	sort.Slice(credentials, func(i, j int) bool {
+		return credentials[i].name+credentials[i].key+credentials[i].strategy < credentials[j].name+credentials[j].key+credentials[j].strategy
+	})
 	return credentials, nil
 }
 
-func extprocPostAuthConfig(providers []v1alpha1.ExternalProvider, credentials []extprocCredential) string {
-	clusters := make([]string, 0, len(providers))
-	for _, provider := range providers {
-		clusters = append(clusters, "provider-"+provider.Name)
+func extprocPostAuthConfig(candidates []envelope.Candidate, credentials []extprocCredential) string {
+	clusterSet := make(map[string]bool, len(candidates))
+	for _, candidate := range candidates {
+		clusterSet[candidate.Cluster] = true
+	}
+	clusters := make([]string, 0, len(clusterSet))
+	for cluster := range clusterSet {
+		clusters = append(clusters, cluster)
 	}
 	sort.Strings(clusters)
 	var b strings.Builder
@@ -173,7 +191,7 @@ func extprocPostAuthConfig(providers []v1alpha1.ExternalProvider, credentials []
 		b.WriteString("      - filter: credential_inject\n        credentials:\n")
 		for _, credential := range credentials {
 			fmt.Fprintf(&b, "          - name: %s\n            namespace: %s\n", credential.name, credential.namespace)
-			fmt.Fprintf(&b, "            key: %s\n            strategy: bearer_token\n            file: %s\n", credential.key, credential.file)
+			fmt.Fprintf(&b, "            key: %s\n            strategy: %s\n            file: %s\n", credential.key, credential.strategy, credential.file)
 		}
 	}
 	b.WriteString("\ninsecure_options:\n  allow_unbounded_body: true\n")

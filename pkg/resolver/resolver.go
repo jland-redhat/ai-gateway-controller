@@ -120,6 +120,19 @@ var ErrNoRoutes = errors.New("resolver: no provider refs resolved to routes")
 // skip is not an error by itself — its skips are reported and only a wholly
 // empty set returns ErrNoRoutes.
 func Resolve(models []*v1alpha1.ExternalModel, providers []*v1alpha1.ExternalProvider) (*ResolvedRouteSet, error) {
+	return resolve(models, providers, false)
+}
+
+// ResolveAll resolves every valid provider binding, including weight-zero
+// references. The serving overlay uses Resolve and therefore excludes those
+// references from selection. The ExtProc runtime uses ResolveAll to preload
+// the complete referenced provider/credential set, so changing the selected
+// provider is an overlay-only update and does not require a pod rollout.
+func ResolveAll(models []*v1alpha1.ExternalModel, providers []*v1alpha1.ExternalProvider) (*ResolvedRouteSet, error) {
+	return resolve(models, providers, true)
+}
+
+func resolve(models []*v1alpha1.ExternalModel, providers []*v1alpha1.ExternalProvider, includeDisabled bool) (*ResolvedRouteSet, error) {
 	type provKey struct{ ns, name string }
 	byKey := make(map[provKey]*v1alpha1.ExternalProvider, len(providers))
 	for _, p := range providers {
@@ -137,6 +150,7 @@ func Resolve(models []*v1alpha1.ExternalModel, providers []*v1alpha1.ExternalPro
 		}
 		mref := m.Namespace + "/" + m.Name
 		mr := ModelRoutes{ModelRef: mref}
+		activeProviders := map[string]bool{}
 		clientName := m.Name
 		if m.Spec.ModelName != "" {
 			clientName = m.Spec.ModelName
@@ -160,10 +174,16 @@ func Resolve(models []*v1alpha1.ExternalModel, providers []*v1alpha1.ExternalPro
 			if ref.Weight != nil {
 				weight = *ref.Weight
 			}
-			if weight <= 0 {
+			if weight <= 0 && !includeDisabled {
 				mr.Skips = append(mr.Skips, newSkip(base,
 					SkipWeightDisabled, fmt.Sprintf("weight %d disables this ref", weight)))
 				continue
+			}
+			if weight > 0 && activeProviders[prov.Name] {
+				return nil, fmt.Errorf("resolver: model %s has multiple active references to provider %s", mref, prov.Name)
+			}
+			if weight > 0 {
+				activeProviders[prov.Name] = true
 			}
 
 			cfg := mergeConfig(prov.Spec.Config, ref.Config)

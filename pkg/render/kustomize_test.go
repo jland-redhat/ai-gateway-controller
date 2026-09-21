@@ -95,6 +95,42 @@ func TestRenderKustomizeBuildsVendoredOverlay(t *testing.T) {
 	}
 }
 
+func assertRenderedExtProcResource(t *testing.T, resource map[string]any) string {
+	t.Helper()
+	name, ok := resource["name"].(string)
+	if !ok {
+		return ""
+	}
+	switch name {
+	case "envoy.filters.http.ext_proc.ipp", "envoy.filters.http.ext_proc.external-model", "envoy.filters.http.ext_proc.external-model-pre":
+	default:
+		return ""
+	}
+	mode, found, err := unstructured.NestedString(resource, "typed_config", "processing_mode", "request_body_mode")
+	if err != nil || !found {
+		t.Fatalf("%s request_body_mode missing: found=%v err=%v", name, found, err)
+	}
+	responseMode, _, _ := unstructured.NestedString(resource, "typed_config", "processing_mode", "response_body_mode")
+	switch name {
+	case "envoy.filters.http.ext_proc.ipp":
+		if mode != "BUFFERED" || responseMode != "BUFFERED" {
+			t.Fatalf("shared post-auth modes = request %q response %q, want BUFFERED/BUFFERED", mode, responseMode)
+		}
+		return "post"
+	case "envoy.filters.http.ext_proc.external-model":
+		if mode != "NONE" || responseMode != "NONE" {
+			t.Fatalf("ExternalModel post-auth modes = request %q response %q, want NONE/NONE", mode, responseMode)
+		}
+		return "external"
+	default:
+		failureModeAllow, found, err := unstructured.NestedBool(resource, "typed_config", "failure_mode_allow")
+		if mode != "BUFFERED" || err != nil || !found || failureModeAllow {
+			t.Fatalf("ExternalModel pre-auth mode=%q failure_mode_allow=%t found=%t err=%v, want BUFFERED/false", mode, failureModeAllow, found, err)
+		}
+		return "external-pre"
+	}
+}
+
 func TestRenderedExtProcPreservesBufferedMaaSAndAddsHeaderPhaseExternalModel(t *testing.T) {
 	const manifestPath = "../../config/manifests/praxis-extproc/overlays/odh"
 
@@ -118,7 +154,7 @@ func TestRenderedExtProcPreservesBufferedMaaSAndAddsHeaderPhaseExternalModel(t *
 	if err != nil || !found {
 		t.Fatalf("EnvoyFilter configPatches missing: found=%v err=%v", found, err)
 	}
-	var postAuth, externalModel, preAuth, externalModelDefaultDisabled int
+	var postAuth, externalModel, preAuth, externalModelPre, externalModelDefaultDisabled int
 	for _, raw := range patches {
 		patch, ok := raw.(map[string]any)
 		if !ok {
@@ -129,29 +165,31 @@ func TestRenderedExtProcPreservesBufferedMaaSAndAddsHeaderPhaseExternalModel(t *
 			continue
 		}
 		if patch["applyTo"] == "VIRTUAL_HOST" {
-			if disabled, found, _ := unstructured.NestedBool(patch, "patch", "value", "typed_per_filter_config", "envoy.filters.http.ext_proc.external-model", "disabled"); found && disabled {
-				externalModelDefaultDisabled++
+			typed := map[string]any{}
+			if value, ok := value["value"].(map[string]any); ok {
+				typed, _, _ = unstructured.NestedMap(value, "typed_per_filter_config")
+			}
+			for _, filterName := range []string{
+				"envoy.filters.http.ext_proc.external-model",
+				"envoy.filters.http.ext_proc.external-model-pre",
+			} {
+				if disabled, found, _ := unstructured.NestedBool(typed, filterName, "disabled"); found && disabled {
+					externalModelDefaultDisabled++
+				}
 			}
 			continue
 		}
 		resource, ok := value["value"].(map[string]any)
-		if !ok || (resource["name"] != "envoy.filters.http.ext_proc.ipp" && resource["name"] != "envoy.filters.http.ext_proc.external-model") {
+		if !ok {
 			continue
 		}
-		mode, found, err := unstructured.NestedString(resource, "typed_config", "processing_mode", "request_body_mode")
-		if err != nil || !found {
-			t.Fatalf("post-auth processing mode missing: found=%v err=%v", found, err)
-		}
-		if resource["name"] == "envoy.filters.http.ext_proc.ipp" {
-			if mode != "BUFFERED" {
-				t.Fatalf("shared post-auth request_body_mode = %q, want BUFFERED", mode)
-			}
+		switch assertRenderedExtProcResource(t, resource) {
+		case "post":
 			postAuth++
-		} else {
-			if mode != "NONE" {
-				t.Fatalf("ExternalModel request_body_mode = %q, want NONE", mode)
-			}
+		case "external":
 			externalModel++
+		case "external-pre":
+			externalModelPre++
 		}
 	}
 
@@ -178,7 +216,8 @@ func TestRenderedExtProcPreservesBufferedMaaSAndAddsHeaderPhaseExternalModel(t *
 		preAuth++
 	}
 
-	if postAuth == 0 || externalModel == 0 || preAuth == 0 || externalModelDefaultDisabled == 0 {
-		t.Fatalf("expected buffered post-auth, header-phase ExternalModel, pre-auth, and default-disabled patches, got post=%d external=%d pre=%d disabled=%d", postAuth, externalModel, preAuth, externalModelDefaultDisabled)
+	if postAuth == 0 || externalModel == 0 || preAuth == 0 || externalModelPre == 0 || externalModelDefaultDisabled < 2 {
+		t.Fatalf("expected buffered post-auth, header-phase ExternalModel, shared pre-auth, fail-closed ExternalModel pre-auth, and default-disabled patches; post=%d external=%d pre=%d externalPre=%d disabled=%d",
+			postAuth, externalModel, preAuth, externalModelPre, externalModelDefaultDisabled)
 	}
 }

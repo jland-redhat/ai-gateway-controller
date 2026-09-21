@@ -45,6 +45,38 @@ spec:
               timeout: 300s
             message_timeout: 300s
 
+    # ExternalModel pre-auth is fail-closed. It is disabled at the virtual-host
+    # level and enabled only on controller-owned ExternalModel routes so an
+    # unavailable model-extraction processor cannot trust caller headers.
+    - applyTo: HTTP_FILTER
+      match:
+        context: GATEWAY
+        listener:
+          filterChain:
+            filter:
+              name: "envoy.filters.network.http_connection_manager"
+              subFilter:
+                name: extenstions.istio.io/wasmplugin/openshift-ingress.kuadrant-maas-default-gateway
+      patch:
+        operation: INSERT_BEFORE
+        value:
+          name: envoy.filters.http.ext_proc.external-model-pre
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
+            failure_mode_allow: false
+            allow_mode_override: true
+            processing_mode:
+              request_header_mode: "SEND"
+              response_header_mode: "SKIP"
+              request_body_mode: "BUFFERED"
+              response_body_mode: "NONE"
+              request_trailer_mode: "SKIP"
+            grpc_service:
+              envoy_grpc:
+                cluster_name: payload-pre-processing-extproc
+              timeout: 300s
+            message_timeout: 300s
+
     - applyTo: HTTP_FILTER
       match:
         context: GATEWAY
@@ -97,12 +129,41 @@ spec:
               request_header_mode: "SEND"
               response_header_mode: "SEND"
               request_body_mode: "NONE"
-              response_body_mode: "BUFFERED"
+              response_body_mode: "NONE"
               request_trailer_mode: "SKIP"
               response_trailer_mode: "SKIP"
             grpc_service:
               envoy_grpc:
                 cluster_name: payload-processing-external-model-extproc
+              timeout: 300s
+            message_timeout: 300s
+
+    - applyTo: HTTP_FILTER
+      match:
+        context: GATEWAY
+        listener:
+          filterChain:
+            filter:
+              name: "envoy.filters.network.http_connection_manager"
+              subFilter:
+                name: extensions.istio.io/trafficextension/openshift-ingress.kuadrant-maas-default-gateway~istio-translated-wasmplugin
+      patch:
+        operation: INSERT_BEFORE
+        value:
+          name: envoy.filters.http.ext_proc.external-model-pre
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
+            failure_mode_allow: false
+            allow_mode_override: true
+            processing_mode:
+              request_header_mode: "SEND"
+              response_header_mode: "SKIP"
+              request_body_mode: "BUFFERED"
+              response_body_mode: "NONE"
+              request_trailer_mode: "SKIP"
+            grpc_service:
+              envoy_grpc:
+                cluster_name: payload-pre-processing-extproc
               timeout: 300s
             message_timeout: 300s
 
@@ -177,6 +238,35 @@ spec:
               subFilter:
                 name: extensions.istio.io/wasmplugin/openshift-ingress.kuadrant-maas-default-gateway
       patch:
+        operation: INSERT_BEFORE
+        value:
+          name: envoy.filters.http.ext_proc.external-model-pre
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
+            failure_mode_allow: false
+            allow_mode_override: true
+            processing_mode:
+              request_header_mode: "SEND"
+              response_header_mode: "SKIP"
+              request_body_mode: "BUFFERED"
+              response_body_mode: "NONE"
+              request_trailer_mode: "SKIP"
+            grpc_service:
+              envoy_grpc:
+                cluster_name: payload-pre-processing-extproc
+              timeout: 300s
+            message_timeout: 300s
+
+    - applyTo: HTTP_FILTER
+      match:
+        context: GATEWAY
+        listener:
+          filterChain:
+            filter:
+              name: "envoy.filters.network.http_connection_manager"
+              subFilter:
+                name: extensions.istio.io/wasmplugin/openshift-ingress.kuadrant-maas-default-gateway
+      patch:
         operation: INSERT_AFTER
         value:
           name: envoy.filters.http.ext_proc.external-model
@@ -188,7 +278,7 @@ spec:
               request_header_mode: "SEND"
               response_header_mode: "SEND"
               request_body_mode: "NONE"
-              response_body_mode: "BUFFERED"
+              response_body_mode: "NONE"
               request_trailer_mode: "SKIP"
               response_trailer_mode: "SKIP"
             grpc_service:
@@ -279,7 +369,7 @@ spec:
               request_header_mode: "SEND"
               response_header_mode: "SEND"
               request_body_mode: "NONE"
-              response_body_mode: "BUFFERED"
+              response_body_mode: "NONE"
               request_trailer_mode: "SKIP"
               response_trailer_mode: "SKIP"
             grpc_service:
@@ -372,12 +462,43 @@ spec:
               request_header_mode: "SEND"
               response_header_mode: "SEND"
               request_body_mode: "NONE"
-              response_body_mode: "BUFFERED"
+              response_body_mode: "NONE"
               request_trailer_mode: "SKIP"
               response_trailer_mode: "SKIP"
             grpc_service:
               envoy_grpc:
                 cluster_name: payload-processing-external-model-extproc
+              timeout: 300s
+            message_timeout: 300s
+
+    # RHCL also gets the fail-closed ExternalModel pre-auth processor. It is
+    # disabled at the virtual-host level and enabled only on owned routes.
+    - applyTo: HTTP_FILTER
+      match:
+        context: GATEWAY
+        listener:
+          filterChain:
+            filter:
+              name: "envoy.filters.network.http_connection_manager"
+              subFilter:
+                name: envoy.filters.http.wasm
+      patch:
+        operation: INSERT_BEFORE
+        value:
+          name: envoy.filters.http.ext_proc.external-model-pre
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
+            failure_mode_allow: false
+            allow_mode_override: true
+            processing_mode:
+              request_header_mode: "SEND"
+              response_header_mode: "SKIP"
+              request_body_mode: "BUFFERED"
+              response_body_mode: "NONE"
+              request_trailer_mode: "SKIP"
+            grpc_service:
+              envoy_grpc:
+                cluster_name: payload-pre-processing-extproc
               timeout: 300s
             message_timeout: 300s
 
@@ -400,6 +521,9 @@ spec:
         value:
           typed_per_filter_config:
             envoy.filters.http.ext_proc.external-model:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
+              disabled: true
+            envoy.filters.http.ext_proc.external-model-pre:
               "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
               disabled: true
 

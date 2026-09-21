@@ -35,21 +35,24 @@ import (
 )
 
 const (
-	conditionReady              = "Ready"
-	conditionOverlayDistributed = "OverlayDistributed"
-	reasonReconciled            = "Reconciled"
-	reasonReconcileFailed       = "ReconcileFailed"
-	reasonNotPraxis             = "NotPraxisTenant"
-	reasonTenantNotReady        = "TenantNotReady"
-	reasonNoRoutes              = "NoRoutes"
-	reasonProviderNotReady      = "ProviderNotReady"
-	providerServicePrefix       = "provider-"
-	providerSelectionSinkPrefix = "provider-selection-required-"
-	selectedProviderHeader      = "X-AI-Routing-Candidate"
-	externalModelExtProcFilter  = "envoy.filters.http.ext_proc.external-model"
-	modelRoutePrefix            = "external-model-"
-	externalModelFinalizer      = "inference.opendatahub.io/external-model-cleanup"
+	conditionReady                = "Ready"
+	conditionOverlayDistributed   = "OverlayDistributed"
+	reasonReconciled              = "Reconciled"
+	reasonReconcileFailed         = "ReconcileFailed"
+	reasonNotPraxis               = "NotPraxisTenant"
+	reasonTenantNotReady          = "TenantNotReady"
+	reasonNoRoutes                = "NoRoutes"
+	reasonProviderNotReady        = "ProviderNotReady"
+	providerServicePrefix         = "provider-"
+	providerSelectionSinkPrefix   = "provider-selection-required-"
+	selectedProviderHeader        = "X-AI-Routing-Candidate"
+	externalModelPreExtProcFilter = "envoy.filters.http.ext_proc.external-model-pre"
+	externalModelExtProcFilter    = "envoy.filters.http.ext_proc.external-model"
+	modelRoutePrefix              = "external-model-"
+	externalModelFinalizer        = "inference.opendatahub.io/external-model-cleanup"
 )
+
+var errCredentialNotReady = errors.New("effective provider credential is not ready")
 
 // Reconciler is the sole writer for the ExternalModel transport plane and the
 // routing overlay. It resolves one namespace-scoped route set and renders both
@@ -284,6 +287,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		}
 		return reconcile.Result{}, err
 	}
+	if err := r.validateResolvedCredentials(ctx, set.Routes()); err != nil {
+		reason := reasonReconcileFailed
+		if errors.Is(err, errCredentialNotReady) {
+			reason = reasonProviderNotReady
+		}
+		if statusErr := r.updateModelStatus(ctx, &model, false, reason, err.Error(), nil); statusErr != nil {
+			return reconcile.Result{}, statusErr
+		}
+		return reconcile.Result{}, err
+	}
 	if len(set.Routes()) == 0 {
 		if err := r.enableExternalModelRoutes(ctx, tenant.ID(ait.GetName()), req.Namespace, gatewayName, gatewayNamespace, nil); err != nil {
 			return reconcile.Result{}, err
@@ -434,6 +447,9 @@ func (r *Reconciler) reconcileDeletedModel(ctx context.Context, deleted *v1alpha
 	if err != nil {
 		return fmt.Errorf("resolve remaining ExternalModels after deletion: %w", err)
 	}
+	if err := r.validateResolvedCredentials(ctx, set.Routes()); err != nil {
+		return fmt.Errorf("validate remaining ExternalModel credentials after deletion: %w", err)
+	}
 	if err := r.applyTransport(ctx, set.Routes(), deleted.Namespace, tenant.ID(ait.GetName()), gatewayName, gatewayNamespace, modelOwners, providerOwners); err != nil {
 		return fmt.Errorf("rebuild transport after ExternalModel deletion: %w", err)
 	}
@@ -551,7 +567,7 @@ func (r *Reconciler) praxisTenantForNamespace(ctx context.Context, namespace str
 	return nil, false, nil
 }
 
-func (r *Reconciler) validateProvider(ctx context.Context, p *v1alpha1.ExternalProvider) error {
+func (r *Reconciler) validateProvider(_ context.Context, p *v1alpha1.ExternalProvider) error {
 	if err := validateProviderEndpoint(p.Spec.Endpoint); err != nil {
 		return err
 	}
@@ -565,15 +581,39 @@ func (r *Reconciler) validateProvider(ctx context.Context, p *v1alpha1.ExternalP
 	if p.Spec.Auth.SecretRef.Name == "" {
 		return errors.New("auth.secretRef.name is required")
 	}
+	return nil
+}
+
+// validateResolvedCredentials checks the effective credential after applying
+// any ExternalModel ref override. This is intentionally route-based: the same
+// resolved reference is published in the overlay and projected into ExtProc.
+func (r *Reconciler) validateResolvedCredentials(ctx context.Context, routes []resolver.Route) error {
 	if r.APIReader == nil {
 		return errors.New("APIReader is required for credential Secret reads")
 	}
-	var secret corev1.Secret
-	if err := r.APIReader.Get(ctx, client.ObjectKey{Namespace: p.Namespace, Name: p.Spec.Auth.SecretRef.Name}, &secret); err != nil {
-		return fmt.Errorf("credential Secret %s/%s: %w", p.Namespace, p.Spec.Auth.SecretRef.Name, err)
-	}
-	if _, ok := secret.Data["api-key"]; !ok {
-		return fmt.Errorf("credential Secret %s/%s is missing key api-key", p.Namespace, p.Spec.Auth.SecretRef.Name)
+	seen := map[client.ObjectKey]bool{}
+	for _, route := range routes {
+		if route.AuthType == "" {
+			continue
+		}
+		if route.AuthType != "apikey" {
+			return fmt.Errorf("model %s provider %s uses unsupported authentication strategy %q", route.Model, route.Provider, route.AuthType)
+		}
+		if route.SecretName == "" || route.SecretKey == "" {
+			return fmt.Errorf("model %s provider %s has an incomplete effective credential reference", route.Model, route.Provider)
+		}
+		key := client.ObjectKey{Namespace: route.Namespace, Name: route.SecretName}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		var secret corev1.Secret
+		if err := r.APIReader.Get(ctx, key, &secret); err != nil {
+			return fmt.Errorf("%w: Secret %s/%s: %w", errCredentialNotReady, key.Namespace, key.Name, err)
+		}
+		if _, ok := secret.Data[route.SecretKey]; !ok {
+			return fmt.Errorf("%w: Secret %s/%s is missing key %s", errCredentialNotReady, key.Namespace, key.Name, route.SecretKey)
+		}
 	}
 	return nil
 }
@@ -721,6 +761,19 @@ func (r *Reconciler) enableExternalModelRoutes(ctx context.Context, tenantID, mo
 				"patch": map[string]any{
 					"operation": "MERGE",
 					"value": map[string]any{"typed_per_filter_config": map[string]any{
+						externalModelPreExtProcFilter: map[string]any{
+							"@type": "type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute",
+							"overrides": map[string]any{
+								"processing_mode": map[string]any{
+									"request_header_mode":   "SEND",
+									"request_body_mode":     "BUFFERED",
+									"response_header_mode":  "SKIP",
+									"response_body_mode":    "NONE",
+									"request_trailer_mode":  "SKIP",
+									"response_trailer_mode": "SKIP",
+								},
+							},
+						},
 						externalModelExtProcFilter: map[string]any{
 							"@type": "type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute",
 							// ExtProcPerRoute is disable-only when the
@@ -733,11 +786,15 @@ func (r *Reconciler) enableExternalModelRoutes(ctx context.Context, tenantID, mo
 									"request_header_mode":   "SEND",
 									"request_body_mode":     "NONE",
 									"response_header_mode":  "SEND",
-									"response_body_mode":    "BUFFERED",
+									"response_body_mode":    "NONE",
 									"request_trailer_mode":  "SKIP",
 									"response_trailer_mode": "SKIP",
 								},
 							},
+						},
+						"envoy.filters.http.ext_proc.ipp-pre": map[string]any{
+							"@type":    "type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute",
+							"disabled": true,
 						},
 						"envoy.filters.http.ext_proc.ipp": map[string]any{
 							"@type":    "type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute",

@@ -274,6 +274,13 @@ func strategyFor(route resolver.Route) (string, error) {
 	}
 }
 
+// CredentialStrategy exposes the same provider/API-format credential mapping
+// used by Render to the tenant reconciler when it preloads unselected
+// bindings into the ExtProc runtime configuration.
+func CredentialStrategy(route resolver.Route) (string, error) {
+	return strategyFor(route)
+}
+
 func checkUniformWeights(m resolver.ModelRoutes) error {
 	if len(m.Routes) == 0 {
 		return nil // model renders no candidates; skips are the record

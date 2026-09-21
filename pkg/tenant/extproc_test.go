@@ -4,10 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	v1alpha1 "github.com/opendatahub-io/ai-gateway-controller/api/inference/v1alpha1"
+	"github.com/opendatahub-io/ai-gateway-controller/pkg/envelope"
 )
 
 func TestConfigureExternalModelExtProcProjectsReferencesAndTrustedHandoff(t *testing.T) {
@@ -24,11 +23,11 @@ func TestConfigureExternalModelExtProcProjectsReferencesAndTrustedHandoff(t *tes
 			}}},
 		}},
 	}
-	providers := []v1alpha1.ExternalProvider{
-		{ObjectMeta: metav1.ObjectMeta{Name: "provider-b", Namespace: "tenant-a"}, Spec: v1alpha1.ExternalProviderSpec{Auth: v1alpha1.AuthConfig{Type: "apikey", SecretRef: v1alpha1.NameReference{Name: "b-secret"}}}},
-		{ObjectMeta: metav1.ObjectMeta{Name: "provider-a", Namespace: "tenant-a"}, Spec: v1alpha1.ExternalProviderSpec{Auth: v1alpha1.AuthConfig{Type: "apikey", SecretRef: v1alpha1.NameReference{Name: "a-secret"}}}},
+	candidates := []envelope.Candidate{
+		{Cluster: "provider-provider-b", StableID: "provider-provider-b", Credential: &envelope.Credential{Strategy: "bearer_token", SecretRef: envelope.SecretRef{Name: "b-secret", Namespace: "tenant-a", Key: "api-key"}}},
+		{Cluster: "provider-provider-a", StableID: "provider-provider-a", Credential: &envelope.Credential{Strategy: "bearer_token", SecretRef: envelope.SecretRef{Name: "a-secret", Namespace: "tenant-a", Key: "api-key"}}},
 	}
-	if err := configureExternalModelExtProc(resources, "tenant-a", providers); err != nil {
+	if err := configureExternalModelExtProc(resources, "tenant-a", candidates); err != nil {
 		t.Fatal(err)
 	}
 	data, found, err := unstructured.NestedStringMap(resources[0].Object, "data")
@@ -90,21 +89,15 @@ func TestExternalModelConfigOmitsCredentialFilterWithoutReferences(t *testing.T)
 }
 
 func TestExtprocCredentialsRejectCrossNamespaceProvider(t *testing.T) {
-	providers := []v1alpha1.ExternalProvider{{
-		ObjectMeta: metav1.ObjectMeta{Name: "provider", Namespace: "other"},
-		Spec:       v1alpha1.ExternalProviderSpec{Auth: v1alpha1.AuthConfig{Type: "apikey", SecretRef: v1alpha1.NameReference{Name: "secret"}}},
-	}}
-	if _, err := extprocCredentials("tenant-a", providers); err == nil || !strings.Contains(err.Error(), "cross-namespace") {
+	candidates := []envelope.Candidate{{StableID: "provider-provider", Credential: &envelope.Credential{Strategy: "bearer_token", SecretRef: envelope.SecretRef{Name: "secret", Namespace: "other", Key: "api-key"}}}}
+	if _, err := extprocCredentials("tenant-a", candidates); err == nil || !strings.Contains(err.Error(), "cross-namespace") {
 		t.Fatalf("expected cross-namespace rejection, got %v", err)
 	}
 }
 
 func TestExtprocCredentialsRejectsUnsupportedAuth(t *testing.T) {
-	providers := []v1alpha1.ExternalProvider{{
-		ObjectMeta: metav1.ObjectMeta{Name: "provider", Namespace: "tenant-a"},
-		Spec:       v1alpha1.ExternalProviderSpec{Auth: v1alpha1.AuthConfig{Type: "oauth2", SecretRef: v1alpha1.NameReference{Name: "secret"}}},
-	}}
-	if _, err := extprocCredentials("tenant-a", providers); err == nil || !strings.Contains(err.Error(), "unsupported ExtProc credential type") {
+	candidates := []envelope.Candidate{{StableID: "provider-provider", Credential: &envelope.Credential{Strategy: "oauth2", SecretRef: envelope.SecretRef{Name: "secret", Namespace: "tenant-a", Key: "api-key"}}}}
+	if _, err := extprocCredentials("tenant-a", candidates); err == nil || !strings.Contains(err.Error(), "unsupported ExtProc credential strategy") {
 		t.Fatalf("expected unsupported-auth rejection, got %v", err)
 	}
 }

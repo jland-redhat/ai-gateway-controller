@@ -11,14 +11,16 @@ so this implementation repository does not carry a second authoritative copy.
 built into a released image, not yet pushed to a remote, not yet wired
 end-to-end into a live `ai-gateway-operator` reconcile (see "Out of scope").
 
-**Phase 2 (EA2):** the multi-tenant Praxis-vs-IPP fan-out half is
-implemented: `pkg/tenant` primarily watches `MaasTenantConfig` — mirroring
+**Phase 2 (EA2):** the multi-tenant Praxis-vs-IPP fan-out and ExternalModel
+control plane are implemented. `pkg/tenant` primarily watches
+`MaasTenantConfig` — mirroring
 maas-controller's own `TenantReconciler` — and, for every tenant whose
 `metadata.annotations["maas.opendatahub.io/payload-processing-type"]` is
 `"praxis"`, renders, SSA-applies, and (on switch-away or deletion) cleans
 up a per-tenant copy of the vendored `praxis-extproc` manifests — replacing
-Phase 1's single unconditional global install. `ExternalModel` /
-`ExternalProvider` reconciliation is still to do.
+Phase 1's single unconditional global install. `pkg/controller` reconciles
+`ExternalModel` / `ExternalProvider` resources into the tenant-local ExtProc
+overlay, credential projections, and Envoy-owned provider transport.
 
 ## Purpose
 
@@ -45,10 +47,10 @@ dataplane. 3.5 ships only `maas-controller` + IPP; see
 **Phase 1 (implemented today)** vendors and installs `praxis-extproc`
 manifests only.
 
-**Phase 2 (EA2, partially implemented)** primarily watches `MaasTenantConfig`
-and, per opted-in tenant, applies (and cleans up) its own per-tenant copy of
-those manifests (implemented); `ExternalModel` / `ExternalProvider` watch and
-dynamic per-model config generation is still to do (see [Scope](#scope)).
+**Phase 2 (EA2, implemented)** primarily watches `MaasTenantConfig` and, per
+opted-in tenant, applies and cleans up its own per-tenant ExtProc resources.
+It also watches `ExternalModel` / `ExternalProvider` and publishes dynamic
+per-model routing, provider transport, and reference-only credentials.
 
 ## Deployment architecture
 
@@ -224,7 +226,7 @@ doc comment for the full state machine this mirrors. In short:
   are tenant-agnostic; `pkg/tenant` (Phase 2) is what makes them per-tenant.
 - PR/CI conventions — see [CONTRIBUTING.md](./CONTRIBUTING.md).
 
-### Phase 2 — multi-tenancy + external models (EA2, partially implemented)
+### Phase 2 — multi-tenancy + external models (EA2, implemented)
 
 - **Implemented:** `pkg/tenant` primarily watches `MaasTenantConfig`
   (`maas.opendatahub.io/v1alpha1`) — mirroring maas-controller's own
@@ -246,10 +248,10 @@ doc comment for the full state machine this mirrors. In short:
   retries before force-removing the finalizer without confirmed cleanup.
   This controller does not write any `AITenant` at all (status or
   otherwise) — maas-controller's own `AITenant` reconciler owns it today.
-- **Not yet implemented:** `ExternalModel` / `ExternalProvider` watch and
-  dynamic per-model config generation — full control-plane replacement for
-  IPP (Praxis handles the dataplane). **Not** in `maas-controller` today;
-  lives in IPP and moves here.
+- `pkg/controller` watches `ExternalModel` / `ExternalProvider` and publishes
+  the content-addressed overlay, provider routes and transport, and Secret
+  references. Tenant-local ExtProc runs `intelligent_route` and
+  `credential_inject`; Envoy performs route reselection and the provider hop.
 
 ### Out of scope (explicitly deferred)
 - Watching `AIGateway` (or any CR) from this controller. Lifecycle is

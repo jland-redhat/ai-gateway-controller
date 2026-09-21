@@ -259,9 +259,14 @@ preserved and must not be replaced by a typed AITenant field.
 The controller still uses the persisted ExternalProvider phase as its
 reconciliation gate. Before each live provider request, the Kind E2E also
 waits for the selected Envoy provider cluster to report a healthy Endpoint
-through the Envoy admin interface, with a bounded timeout. This separates
-resource reconciliation from request-path endpoint convergence; it does not
-claim health-based provider selection or failover.
+through the Envoy admin interface, with a bounded timeout. The semantic
+overlay gate additionally requires the published ConfigMap digest, a fresh
+recomputed digest, the mounted ExtProc file, and the ExtProc accepted and
+serving revisions to agree for two consecutive samples. It is used before
+initial Provider A traffic, the A-to-B switch, the Provider A reset, and the
+last-known-good request after an invalid overlay. This separates resource
+reconciliation from request-path endpoint convergence; it does not claim
+health-based provider selection or failover.
 
 The corrected qualification uses the run-owned CA with `curl --cacert`; TLS
 verification is enabled and no HTTP downgrade or insecure flag is used. Evidence

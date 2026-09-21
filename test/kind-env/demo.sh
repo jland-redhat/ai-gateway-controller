@@ -46,6 +46,12 @@ done
 [[ "$CONTEXT" == kind-* ]] || { echo "FAIL: expected a Kind context"; exit 2; }
 mkdir -p "$EVIDENCE"
 exec > >(tee "$EVIDENCE/demo.log") 2>&1
+evidence_label() {
+  case "$1" in
+    "$ROOT"/*) printf '%s\n' "${1#"$ROOT"/}" ;;
+    *) printf '%s\n' 'run-evidence' ;;
+  esac
+}
 cleanup() {
   local rc=$?
   set +e
@@ -515,7 +521,7 @@ echo "RESULT"; echo "  Status                 PASS (routing increment)"
 echo "  Credential rotation    NOT DEMONSTRATED"
 echo "  Existing IPP path      FOLLOW-UP"
 echo "  Retained context       $CONTEXT"
-echo "  Evidence               $EVIDENCE"
+echo "  Evidence               $(evidence_label "$EVIDENCE")"
 echo "  Inspect: kubectl --context $CONTEXT get pods -A"
 echo "  Inspect: kubectl --context $CONTEXT -n $TENANT get externalmodel,externalprovider,httproute,service,deployment,configmap"
 echo "  Reset:   ./test/kind-env/demo.sh --context $CONTEXT --reset"
