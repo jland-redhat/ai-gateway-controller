@@ -260,6 +260,45 @@ func configureExternalModelDeployment(u *unstructured.Unstructured, tenantID str
 	if err := setConfigMapVolumeName(u, "plugins-config-volume", PayloadProcessingExternalModelPluginsConfigMapForTenant(tenantID)); err != nil {
 		return fmt.Errorf("ExternalModel ConfigMap volume: %w", err)
 	}
+	volumes, _, err := unstructured.NestedSlice(u.Object, "spec", "template", "spec", "volumes")
+	if err != nil {
+		return fmt.Errorf("read ExternalModel volumes: %w", err)
+	}
+	volumes = appendOrReplaceNamedVolume(volumes, "routing-overlay-volume", map[string]any{
+		"name": "routing-overlay-volume",
+		"configMap": map[string]any{
+			"name":     praxisOverlayName,
+			"optional": true,
+		},
+	})
+	if err := unstructured.SetNestedSlice(u.Object, volumes, "spec", "template", "spec", "volumes"); err != nil {
+		return fmt.Errorf("write ExternalModel volumes: %w", err)
+	}
+	containers, found, err := unstructured.NestedSlice(u.Object, "spec", "template", "spec", "containers")
+	if err != nil || !found || len(containers) == 0 {
+		if err == nil {
+			err = errors.New("containers are missing")
+		}
+		return fmt.Errorf("read ExternalModel containers: %w", err)
+	}
+	container, ok := containers[0].(map[string]any)
+	if !ok {
+		return errors.New("ExternalModel first container is malformed")
+	}
+	mounts, _, err := unstructured.NestedSlice(container, "volumeMounts")
+	if err != nil {
+		return fmt.Errorf("read ExternalModel volume mounts: %w", err)
+	}
+	mounts = appendOrReplaceNamedVolume(mounts, "routing-overlay-volume", map[string]any{
+		"name": "routing-overlay-volume", "mountPath": "/etc/praxis/routing", "readOnly": true,
+	})
+	if err := unstructured.SetNestedSlice(container, mounts, "volumeMounts"); err != nil {
+		return fmt.Errorf("write ExternalModel volume mounts: %w", err)
+	}
+	containers[0] = container
+	if err := unstructured.SetNestedSlice(u.Object, containers, "spec", "template", "spec", "containers"); err != nil {
+		return fmt.Errorf("write ExternalModel containers: %w", err)
+	}
 	return nil
 }
 

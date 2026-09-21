@@ -300,7 +300,8 @@ ai-gateway-controller/
 │   ├── ownership.go                     # field-manager/label ownership check for cleanup deletes
 │   ├── rename.go                        # Rename(): per-tenant resource rename + internal-reference patch
 │   └── reconciler.go                    # Reconciler: primarily watches MaasTenantConfig, apply/cleanup + PraxisCleanupFinalizer
-├── config/manifests/praxis-extproc/     # vendored (committed) praxis-extproc overlay; Build() points here
+├── config/manifests/praxis-extproc/     # exact pinned upstream praxis-extproc manifests
+├── config/manifests/external-model/    # controller-owned Kustomize composition and ExternalModel filters
 ├── config/self/{rbac,manager,default}/  # this repo's own deploy manifest (SA/ClusterRole/Deployment),
 │                                         # namespace opendatahub. Kept as a sibling of config/manifests/
 │                                         # (not nested under it) so ai-gateway-operator can vendor exactly
@@ -316,7 +317,7 @@ ai-gateway-controller/
 | Flag | Default | Purpose |
 |---|---|---|
 | `--image` | `quay.io/opendatahub/odh-praxis-extproc:odh-stable` | Replaces the `praxis-extproc:dev` placeholder image |
-| `--manifest-path` | `/config/manifests/praxis-extproc/overlays/odh` | kustomize entrypoint (matches the Dockerfile `COPY` destination) |
+| `--manifest-path` | `/config/manifests/external-model/overlays/odh` | controller-owned kustomize entrypoint composing pinned upstream manifests and ExternalModel patches |
 | `--maas-api-route-name` | `maas-api-route` | Base name; suffixed per tenant like every other resource. Best-effort — exact fidelity depends on maas-api's real HTTPRoute name and Istio's route-naming scheme |
 | `--resync-interval` | `5m` | `RequeueAfter` once a tenant's resources are applied, so drift gets corrected periodically even without a new `AITenant` watch event |
 | `--deletion-timeout` | `10m` | Maximum time to retry praxis-extproc cleanup for a tenant before force-removing `PraxisCleanupFinalizer` without confirming cleanup succeeded; `0` disables the timeout and retries indefinitely |

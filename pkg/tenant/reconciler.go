@@ -72,8 +72,9 @@ type Reconciler struct {
 	// Client applies the rendered resources and reads/updates MaasTenantConfig
 	// (and reads AITenant).
 	Client client.Client
-	// ManifestPath is the kustomize entrypoint, e.g.
-	// config/manifests/praxis-extproc/overlays/odh.
+	// ManifestPath is the controller-owned kustomize entrypoint, e.g.
+	// config/manifests/external-model/overlays/odh. It composes the pinned
+	// upstream praxis-extproc tree with controller-specific patches.
 	ManifestPath string
 	// Image replaces the vendored overlay's placeholder container image.
 	Image string
@@ -712,6 +713,7 @@ func (r *Reconciler) cleanup(ctx context.Context, tenantID, gatewayNamespace, te
 		{gvkNetworkPolicy, PayloadProcessingNetworkPolicyName(tenantID), gatewayNamespace},
 		{gvkNetworkPolicy, PayloadProcessingNetworkPolicyName(tenantID), tenantNamespace},
 		{gvkEnvoyFilter, PayloadProcessingEnvoyFilterName(tenantID), gatewayNamespace},
+		{gvkEnvoyFilter, PayloadProcessingExternalModelFilterNameForTenant(tenantID), gatewayNamespace},
 		{gvkEnvoyFilter, PayloadProcessingExternalModelEnvoyFilterName(tenantID), gatewayNamespace},
 		{gvkDestinationRule, PayloadProcessingServiceName(tenantID), gatewayNamespace},
 		{gvkDestinationRule, PayloadPreProcessingServiceName(tenantID), gatewayNamespace},

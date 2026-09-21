@@ -39,10 +39,10 @@ import (
 	"github.com/opendatahub-io/ai-gateway-controller/pkg/render"
 )
 
-// manifestPath points at the vendored (committed) praxis-extproc overlay,
-// mirroring pkg/render's own tests. This package is a sibling of
-// pkg/render, so the relative depth to the repo root is the same.
-const manifestPath = "../../config/manifests/praxis-extproc/overlays/odh"
+// manifestPath points at the controller-owned composition of the pinned
+// praxis-extproc overlay and ExternalModel patches. This package is a sibling
+// of pkg/render, so the relative depth to the repo root is the same.
+const manifestPath = "../../config/manifests/external-model/overlays/odh"
 
 // mtcSchemeForTests registers MaasTenantConfigGVK and AITenantGVK (and their
 // List kinds) with a bare scheme so the fake client can Get/List/Patch/

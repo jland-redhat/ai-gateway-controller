@@ -61,14 +61,7 @@ spec:
             - name: plugins-config-volume
               mountPath: /etc/praxis
               readOnly: true
-            - name: routing-overlay-volume
-              mountPath: /etc/praxis/routing
-              readOnly: true
       volumes:
         - name: plugins-config-volume
           configMap:
             name: payload-processing-plugins
-        - name: routing-overlay-volume
-          configMap:
-            name: routing-overlay
-            optional: true

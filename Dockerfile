@@ -33,6 +33,7 @@ RUN chmod +x /manager
 # present in the build context before "docker build" — this Dockerfile does not
 # fetch it itself so image builds stay reproducible from a pinned checkout.
 COPY config/manifests/praxis-extproc /config/manifests/praxis-extproc
+COPY config/manifests/external-model /config/manifests/external-model
 RUN chmod -R g=u /config
 
 # Use a non-root user (OpenShift will assign random UID)

@@ -99,6 +99,12 @@ func PayloadProcessingExternalModelEnvoyFilterName(tenantID string) string {
 	return ResourceName(PayloadProcessingExternalModelName+"-routes", tenantID)
 }
 
+// PayloadProcessingExternalModelFilterNameForTenant returns the name of the
+// controller-owned static ExternalModel filter resource for a tenant.
+func PayloadProcessingExternalModelFilterNameForTenant(tenantID string) string {
+	return ResourceName(PayloadProcessingExternalModelFilterName, tenantID)
+}
+
 func PayloadProcessingPluginsConfigMapForTenant(tenantID string) string {
 	return ResourceName(PayloadProcessingPluginsConfigMapName, tenantID)
 }

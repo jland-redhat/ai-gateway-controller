@@ -62,11 +62,12 @@ func TestNormalizeJSONTypesConvertsIntToInt64(t *testing.T) {
 }
 
 // TestRenderKustomizeBuildsVendoredOverlay is a smoke test against the real
-// vendored manifest tree (hack/scripts/get-manifests.sh). It is skipped, not
+// controller-owned composition of the vendored manifest tree and its
+// ExternalModel patches. It is skipped, not
 // failed, when the manifests have not been fetched yet (e.g. a fresh clone
 // before "make get-manifests").
 func TestRenderKustomizeBuildsVendoredOverlay(t *testing.T) {
-	const manifestPath = "../../config/manifests/praxis-extproc/overlays/odh"
+	const manifestPath = "../../config/manifests/external-model/overlays/odh"
 
 	resources, err := Build(manifestPath)
 	if err != nil {
@@ -81,7 +82,7 @@ func TestRenderKustomizeBuildsVendoredOverlay(t *testing.T) {
 		"Service":            2,
 		"Deployment":         2,
 		"DestinationRule":    2,
-		"EnvoyFilter":        1,
+		"EnvoyFilter":        2,
 		"NetworkPolicy":      1,
 	}
 	gotKinds := map[string]int{}
@@ -132,27 +133,26 @@ func assertRenderedExtProcResource(t *testing.T, resource map[string]any) string
 }
 
 func TestRenderedExtProcPreservesBufferedMaaSAndAddsHeaderPhaseExternalModel(t *testing.T) {
-	const manifestPath = "../../config/manifests/praxis-extproc/overlays/odh"
+	const manifestPath = "../../config/manifests/external-model/overlays/odh"
 
 	resources, err := Build(manifestPath)
 	if err != nil {
 		t.Skipf("vendored manifests not present at %s: %v", manifestPath, err)
 	}
 
-	var envoyFilter *unstructured.Unstructured
+	var patches []any
 	for i := range resources {
-		if resources[i].GetKind() == "EnvoyFilter" {
-			envoyFilter = &resources[i]
-			break
+		if resources[i].GetKind() != "EnvoyFilter" {
+			continue
 		}
+		filterPatches, found, err := unstructured.NestedSlice(resources[i].Object, "spec", "configPatches")
+		if err != nil || !found {
+			t.Fatalf("EnvoyFilter %q configPatches missing: found=%v err=%v", resources[i].GetName(), found, err)
+		}
+		patches = append(patches, filterPatches...)
 	}
-	if envoyFilter == nil {
-		t.Fatal("rendered overlay has no EnvoyFilter")
-	}
-
-	patches, found, err := unstructured.NestedSlice(envoyFilter.Object, "spec", "configPatches")
-	if err != nil || !found {
-		t.Fatalf("EnvoyFilter configPatches missing: found=%v err=%v", found, err)
+	if len(patches) == 0 {
+		t.Fatal("rendered overlay has no EnvoyFilter patches")
 	}
 	var postAuth, externalModel, preAuth, externalModelPre, externalModelDefaultDisabled int
 	for _, raw := range patches {

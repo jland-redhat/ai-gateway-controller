@@ -23,10 +23,10 @@ import (
 )
 
 // Params controls the placeholder substitution PostRender applies to the
-// vendored praxis-extproc manifests. deploy/overlays/odh/kustomization.yaml
-// documents the contract this mirrors: "Namespace is supplied by the
-// consumer ... Placeholder FQDNs / gateway names ... are rewritten by the
-// controller."
+// composed upstream praxis-extproc and controller-owned ExternalModel
+// manifests. The upstream kustomization documents the contract this mirrors:
+// "Namespace is supplied by the consumer ... Placeholder FQDNs / gateway
+// names ... are rewritten by the controller."
 type Params struct {
 	// Namespace is the initial render and Gateway namespace. The tenant
 	// reconciler subsequently moves the post-auth workload and its

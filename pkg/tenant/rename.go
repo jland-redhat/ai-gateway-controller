@@ -74,6 +74,8 @@ func renameOne(u *unstructured.Unstructured, tenantID, namespace string) error {
 		return renamePayloadProcessingReaderClusterRoleBinding(u, tenantID)
 	case kind == "EnvoyFilter" && name == PayloadProcessingName:
 		return renamePayloadProcessingEnvoyFilter(u, tenantID, namespace)
+	case kind == "EnvoyFilter" && name == PayloadProcessingExternalModelFilterName:
+		return renamePayloadProcessingExternalModelFilter(u, tenantID, namespace)
 	case kind == "DestinationRule" && name == PayloadProcessingName:
 		return renamePayloadDestinationRule(u, PayloadProcessingServiceName(tenantID), namespace)
 	case kind == "DestinationRule" && name == PayloadPreProcessingName:
@@ -263,9 +265,8 @@ func renamePayloadProcessingEnvoyFilter(u *unstructured.Unstructured, tenantID, 
 
 func patchPayloadProcessingEnvoyFilterNamespaces(u *unstructured.Unstructured, tenantID, gatewayNamespace, tenantNamespace string) error {
 	targets := map[string]string{
-		"payload-pre-processing-extproc":            serviceFQDN(PayloadPreProcessingServiceName(tenantID), gatewayNamespace),
-		"payload-processing-extproc":                serviceFQDN(PayloadProcessingServiceName(tenantID), tenantNamespace),
-		"payload-processing-external-model-extproc": serviceFQDN(PayloadProcessingExternalModelServiceName(tenantID), tenantNamespace),
+		"payload-pre-processing-extproc": serviceFQDN(PayloadPreProcessingServiceName(tenantID), gatewayNamespace),
+		"payload-processing-extproc":     serviceFQDN(PayloadProcessingServiceName(tenantID), tenantNamespace),
 	}
 
 	configPatches, found, err := unstructured.NestedSlice(u.Object, "spec", "configPatches")
@@ -307,6 +308,43 @@ func patchPayloadProcessingEnvoyFilterNamespaces(u *unstructured.Unstructured, t
 		return fmt.Errorf("write configPatches: %w", err)
 	}
 	return nil
+}
+
+func renamePayloadProcessingExternalModelFilter(u *unstructured.Unstructured, tenantID, namespace string) error {
+	if err := setName(u, PayloadProcessingExternalModelFilterNameForTenant(tenantID)); err != nil {
+		return err
+	}
+	configPatches, found, err := unstructured.NestedSlice(u.Object, "spec", "configPatches")
+	if err != nil {
+		return fmt.Errorf("read ExternalModel configPatches: %w", err)
+	}
+	if !found {
+		return errors.New("ExternalModel configPatches not found")
+	}
+	target := serviceFQDN(PayloadProcessingExternalModelServiceName(tenantID), namespace)
+	patched := 0
+	for i, raw := range configPatches {
+		patch, ok := raw.(map[string]any)
+		if !ok || patch["applyTo"] != "CLUSTER" {
+			continue
+		}
+		body, ok := patch["patch"].(map[string]any)
+		if !ok {
+			continue
+		}
+		value, ok := body["value"].(map[string]any)
+		if !ok || value["name"] != "payload-processing-external-model-extproc" {
+			continue
+		}
+		if err := setClusterUpstreamAddress(value, target); err != nil {
+			return fmt.Errorf("CLUSTER patch %d: %w", i, err)
+		}
+		patched++
+	}
+	if patched != 1 {
+		return fmt.Errorf("expected one ExternalModel CLUSTER patch, found %d", patched)
+	}
+	return unstructured.SetNestedSlice(u.Object, configPatches, "spec", "configPatches")
 }
 
 // setClusterUpstreamAddress rewrites the SNI and the (sole) endpoint
