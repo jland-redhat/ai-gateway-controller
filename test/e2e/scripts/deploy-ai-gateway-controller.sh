@@ -256,11 +256,13 @@ _remove_stale_payload_processing_before_wait() {
 }
 
 _wait_for_praxis_extproc() {
-  echo "Waiting for praxis-extproc (${PRAXIS_EXTPROC_IMAGE}) in ${GATEWAY_NAMESPACE} (timeout: ${PRAXIS_INSTALL_TIMEOUT}s) ..."
+  local tenant_namespace
+  tenant_namespace="$(_tenant_config_namespace)"
+  echo "Waiting for praxis-extproc (${PRAXIS_EXTPROC_IMAGE}) in ${tenant_namespace} (timeout: ${PRAXIS_INSTALL_TIMEOUT}s) ..."
   local deadline=$((SECONDS + PRAXIS_INSTALL_TIMEOUT))
   while [[ $SECONDS -lt $deadline ]]; do
     local image args ready
-    if ! oc get deployment payload-processing -n "${GATEWAY_NAMESPACE}" &>/dev/null; then
+    if ! oc get deployment payload-processing -n "${tenant_namespace}" &>/dev/null; then
       local ns status
       ns="$(_tenant_config_namespace)"
       status="$(oc get maastenantconfig "${MAAS_TENANT_CONFIG_NAME}" -n "${ns}" \
@@ -270,17 +272,17 @@ _wait_for_praxis_extproc() {
       sleep 5
       continue
     fi
-    image="$(oc get deployment payload-processing -n "${GATEWAY_NAMESPACE}" \
+    image="$(oc get deployment payload-processing -n "${tenant_namespace}" \
       -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)"
-    args="$(oc get deployment payload-processing -n "${GATEWAY_NAMESPACE}" \
+    args="$(oc get deployment payload-processing -n "${tenant_namespace}" \
       -o jsonpath='{.spec.template.spec.containers[0].args}' 2>/dev/null || true)"
-    ready="$(oc get deployment payload-processing -n "${GATEWAY_NAMESPACE}" \
+    ready="$(oc get deployment payload-processing -n "${tenant_namespace}" \
       -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")"
 
     if [[ "${image}" == "${PRAXIS_EXTPROC_IMAGE}" ]] \
       && [[ "${args}" == *"/etc/praxis/extproc.yaml"* ]] \
       && [[ "${ready:-0}" -ge 1 ]]; then
-      echo "✅ praxis-extproc ready: ${GATEWAY_NAMESPACE}/payload-processing image=${image}"
+      echo "✅ praxis-extproc ready: ${tenant_namespace}/payload-processing image=${image}"
       return 0
     fi
     echo "  Waiting... image=${image:-<none>} ready=${ready:-0} args=${args:-<none>}"
@@ -288,12 +290,14 @@ _wait_for_praxis_extproc() {
   done
 
   echo "ERROR: praxis-extproc not ready after ${PRAXIS_INSTALL_TIMEOUT}s" >&2
+  oc get deployment -n "${tenant_namespace}" | grep payload || true
+  oc get pods -n "${tenant_namespace}" | grep payload || true
   oc get deployment -n "${GATEWAY_NAMESPACE}" | grep payload || true
   oc get pods -n "${GATEWAY_NAMESPACE}" | grep payload || true
   local pod
-  pod="$(oc get pods -n "${GATEWAY_NAMESPACE}" -o name 2>/dev/null | grep payload-processing | head -1 || true)"
+  pod="$(oc get pods -n "${tenant_namespace}" -o name 2>/dev/null | grep payload-processing | head -1 || true)"
   if [[ -n "${pod}" ]]; then
-    oc describe "${pod}" -n "${GATEWAY_NAMESPACE}" 2>&1 | tail -20 || true
+    oc describe "${pod}" -n "${tenant_namespace}" 2>&1 | tail -20 || true
   fi
   oc logs deployment/ai-gateway-controller -n "${AI_GATEWAY_CONTROLLER_NAMESPACE}" --tail=30 2>&1 || true
   return 1
@@ -350,8 +354,9 @@ _protect_praxis_from_maas_reconcile() {
 }
 
 assert_praxis_extproc_image() {
-  local image
-  image="$(oc get deployment payload-processing -n "${GATEWAY_NAMESPACE}" \
+  local image tenant_namespace
+  tenant_namespace="$(_tenant_config_namespace)"
+  image="$(oc get deployment payload-processing -n "${tenant_namespace}" \
     -o jsonpath='{.spec.template.spec.containers[0].image}')"
   if [[ "${image}" != "${PRAXIS_EXTPROC_IMAGE}" ]]; then
     echo "ERROR: expected payload-processing image ${PRAXIS_EXTPROC_IMAGE}, got ${image}" >&2
