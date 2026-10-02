@@ -1,6 +1,7 @@
 # Pinned models-as-a-service source for ai-gateway-controller e2e.
 #
-# Includes short subscription IDs in TRLP predicates (#1546) and cascade-deletion tests.
+# Includes payloadPreProcessing config + resource override E2E (RHOAIENG-97731 / #1602),
+# short subscription IDs in TRLP predicates (#1546), and cascade-deletion tests.
 #
 # Validate e2e when bumping this pin. E2E also deploys the MaaS images built from this
 # commit (test/e2e/scripts/maas-image-defaults.sh), so pin a models-as-a-service main commit
@@ -8,6 +9,6 @@
 # Override for one-off runs without editing this file:
 #   MAAS_COMMIT=<sha> ./test/e2e/scripts/prow_run_ai_gateway_controller_test.sh
 maas_repo=https://github.com/opendatahub-io/models-as-a-service
-maas_commit=090cc5d1a52a82f75b81a0a104f0d244c9a0ab9f
+maas_commit=e1bc8d5b02c0a32c220f8e276d269d1cbe44ab4a
 maas_ref=main
-updated_at=2026-10-06T18:06:56Z
+updated_at=2026-10-14T14:15:00Z
