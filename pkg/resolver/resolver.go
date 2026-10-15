@@ -3,7 +3,8 @@
 //
 // It reproduces the merged-config semantics of the IPP model-provider-resolver
 // (opendatahub-io/ai-gateway-payload-processing): model-ref config overrides
-// provider config, refs are skipped (not failed) when individually bad, and
+// provider config except for tls.caCertificates, which configures shared
+// provider transport; refs are skipped (not failed) when individually bad, and
 // reconciliation fails only when a model resolves zero routes.
 package resolver
 
@@ -26,6 +27,9 @@ const (
 	// SkipRefNotFound: the referenced ExternalProvider does not exist in
 	// the model's namespace.
 	SkipRefNotFound SkipReason = "RefNotFound"
+	// SkipRefNamespaceUnsupported: cross-namespace provider resolution and
+	// authorization are not implemented; never substitute a local provider.
+	SkipRefNamespaceUnsupported SkipReason = "RefNamespaceUnsupported"
 	// SkipProviderNotReady: the provider exists but its status.phase is
 	// not Ready. Blocking gate ported from IPP: a ref may not route to a
 	// provider whose networking (Service/SE/DR) is not confirmed.
@@ -157,6 +161,11 @@ func resolve(models []*v1alpha1.ExternalModel, providers []*v1alpha1.ExternalPro
 		}
 		for _, ref := range m.Spec.ExternalProviderRefs {
 			base := Skip{ModelRef: mref, ProviderRef: ref.Ref.Name}
+			if ref.Ref.Namespace != "" && ref.Ref.Namespace != m.Namespace {
+				mr.Skips = append(mr.Skips, newSkip(base, SkipRefNamespaceUnsupported,
+					fmt.Sprintf("cross-namespace ExternalProvider reference %q is not supported", ref.Ref.Namespace+"/"+ref.Ref.Name)))
+				continue
+			}
 
 			prov, ok := byKey[provKey{m.Namespace, ref.Ref.Name}]
 			if !ok {
@@ -184,6 +193,11 @@ func resolve(models []*v1alpha1.ExternalModel, providers []*v1alpha1.ExternalPro
 			}
 			if weight > 0 {
 				activeProviders[prov.Name] = true
+			}
+
+			providerCA := strings.TrimSpace(prov.Spec.Config["tls.caCertificates"])
+			if modelCA, configured := ref.Config["tls.caCertificates"]; configured && strings.TrimSpace(modelCA) != providerCA {
+				return nil, fmt.Errorf("resolver: model %s ref %s: tls.caCertificates cannot override ExternalProvider %s because provider transport is shared; configure it on the ExternalProvider", mref, ref.Ref.Name, prov.Name)
 			}
 
 			cfg := mergeConfig(prov.Spec.Config, ref.Config)
