@@ -41,7 +41,8 @@ func TestEnsurePluginsConfigMapMigrationAllowed(t *testing.T) {
 
 	t.Run("absent allows", func(t *testing.T) {
 		t.Parallel()
-		r := &Reconciler{Client: fake.NewClientBuilder().WithScheme(scheme).Build()}
+		c := fake.NewClientBuilder().WithScheme(scheme).Build()
+		r := &Reconciler{Client: c, APIReader: c}
 		if err := r.ensurePluginsConfigMapMigrationAllowed(context.Background(), mtc, "openshift-ingress", ""); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -53,7 +54,8 @@ func TestEnsurePluginsConfigMapMigrationAllowed(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{Name: PayloadProcessingPluginsConfigMapName, Namespace: "openshift-ingress"},
 			Data:       map[string]string{"extproc.yaml": "server: {}"},
 		}
-		r := &Reconciler{Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(cm).Build()}
+		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cm).Build()
+		r := &Reconciler{Client: c, APIReader: c}
 		if err := r.ensurePluginsConfigMapMigrationAllowed(context.Background(), mtc, "openshift-ingress", ""); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -67,7 +69,8 @@ func TestEnsurePluginsConfigMapMigrationAllowed(t *testing.T) {
 				ippProcessingConfigKey: "kind: PayloadProcessorConfig\n",
 			},
 		}
-		r := &Reconciler{Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(cm).Build()}
+		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cm).Build()
+		r := &Reconciler{Client: c, APIReader: c}
 		err := r.ensurePluginsConfigMapMigrationAllowed(context.Background(), mtc, "openshift-ingress", "")
 		if err == nil {
 			t.Fatal("expected error for IPP-shaped ConfigMap without force annotation")
@@ -84,9 +87,29 @@ func TestEnsurePluginsConfigMapMigrationAllowed(t *testing.T) {
 				ippProcessingConfigKey: "kind: PayloadProcessorConfig\n",
 			},
 		}
-		r := &Reconciler{Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(cm).Build()}
+		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cm).Build()
+		r := &Reconciler{Client: c, APIReader: c}
 		if err := r.ensurePluginsConfigMapMigrationAllowed(context.Background(), forced, "openshift-ingress", ""); err != nil {
 			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	// Cache lag: Client sees NotFound / Praxis-shaped; live still has IPP keys.
+	// The guard must use APIReader so ForceOwnership cannot overwrite IPP config.
+	t.Run("blocks on live IPP when cache is stale NotFound", func(t *testing.T) {
+		t.Parallel()
+		liveIPP := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: PayloadProcessingPluginsConfigMapName, Namespace: "openshift-ingress"},
+			Data: map[string]string{
+				ippProcessingConfigKey: "kind: PayloadProcessorConfig\n",
+			},
+		}
+		cacheClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+		liveClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(liveIPP).Build()
+		r := &Reconciler{Client: cacheClient, APIReader: liveClient}
+		err := r.ensurePluginsConfigMapMigrationAllowed(context.Background(), mtc, "openshift-ingress", "")
+		if err == nil {
+			t.Fatal("expected error when live ConfigMap is IPP-shaped even if cache returns NotFound")
 		}
 	})
 }

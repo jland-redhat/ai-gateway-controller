@@ -73,10 +73,10 @@ type Reconciler struct {
 	// (and reads AITenant).
 	Client client.Client
 	// APIReader reads directly from the API server, bypassing the informer
-	// cache. The AITenant identity/ownership/readiness decision must be made
-	// against live state: a cache-backed read can lag a delete+recreate during
-	// a watch disruption, letting the UID fence compare stale-to-stale and
-	// adopt a replaced tenant.
+	// cache. Live reads are required for the AITenant identity/ownership/
+	// readiness fence (cache lag can compare stale-to-stale across a
+	// delete+recreate) and for the plugins ConfigMap migration guard (cache
+	// lag can miss a leftover IPP-shaped ConfigMap before ForceOwnership apply).
 	APIReader client.Reader
 	// ManifestPath is the controller-owned kustomize entrypoint, e.g.
 	// config/manifests/external-model/overlays/odh. It composes the pinned

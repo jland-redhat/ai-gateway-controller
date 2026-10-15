@@ -57,7 +57,12 @@ func (r *Reconciler) ensurePluginsConfigMapMigrationAllowed(
 		Namespace: gatewayNamespace,
 		Name:      PayloadProcessingPluginsConfigMapForTenant(tenantID),
 	}
-	if err := r.Client.Get(ctx, key, cm); err != nil {
+	// Read live from the API server, not the informer cache: a cache-backed
+	// Get can lag and return stale NotFound or Praxis-shaped data while the
+	// live ConfigMap still holds IPP keys. That would let this guard pass and
+	// render.Apply ForceOwnership-overwrite the IPP config. APIReader must be
+	// wired (see Reconciler.APIReader); reads fail rather than silently degrade.
+	if err := r.APIReader.Get(ctx, key, cm); err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil
 		}
