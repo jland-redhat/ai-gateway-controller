@@ -32,6 +32,9 @@ MAAS_CONTROLLER_DEPLOYMENT="${MAAS_CONTROLLER_DEPLOYMENT:-maas-controller}"
 MAAS_CONTROLLER_PRIOR_REPLICAS=""
 MAAS_CONTROLLER_PAUSED=false
 MAAS_CONTROLLER_RESUME_REPLICAS="${MAAS_CONTROLLER_RESUME_REPLICAS:-1}"
+AIGC_DEPLOYMENT="${AIGC_DEPLOYMENT:-ai-gateway-controller}"
+AIGC_PRIOR_REPLICAS=""
+AIGC_PAUSED=false
 
 REMOVE_MAAS_IPP="${REMOVE_MAAS_IPP:-${SCALE_DOWN_PAYLOAD_PROCESSING:-true}}"
 PRAXIS_INSTALL_TIMEOUT="${PRAXIS_INSTALL_TIMEOUT:-300}"
@@ -84,6 +87,10 @@ fi
 
 _on_deploy_exit() {
   local code=$?
+  if [[ $code -ne 0 && -n "${AIGC_PRIOR_REPLICAS:-}" && "${AIGC_PAUSED:-}" == "true" ]]; then
+    echo "Deploy failed; attempting to resume ai-gateway-controller ..."
+    _resume_ai_gateway_controller || true
+  fi
   if [[ $code -ne 0 && -n "${MAAS_CONTROLLER_PRIOR_REPLICAS:-}" && "${MAAS_CONTROLLER_PAUSED:-}" == "true" ]]; then
     echo "Deploy failed; attempting to resume maas-controller ..."
     _resume_maas_controller || true
@@ -133,6 +140,44 @@ _resume_maas_controller_for_aitenant_webhook() {
   fi
   echo "Resuming maas-controller so the MaasTenantConfig webhook stays available ..."
   _resume_maas_controller
+}
+
+# Pause aigc while clearing the handoff annotation and deleting legacy IPP.
+# With MaaS default-praxis (#1579) + annotation-triggered reconcile (#1649), a
+# live aigc immediately reclaiming cleanup-complete→steady races the clear and
+# opens the deploy gate during legacy removal.
+_pause_ai_gateway_controller() {
+  local replicas
+  replicas="$(oc get deployment "${AIGC_DEPLOYMENT}" -n "${AI_GATEWAY_CONTROLLER_NAMESPACE}" \
+    -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "")"
+  if [[ -z "${replicas}" ]]; then
+    echo "WARN: ${AIGC_DEPLOYMENT} not found in ${AI_GATEWAY_CONTROLLER_NAMESPACE}; skipping pause"
+    AIGC_PRIOR_REPLICAS=""
+    return 0
+  fi
+  AIGC_PRIOR_REPLICAS="${replicas}"
+  if [[ "${replicas}" == "0" ]]; then
+    AIGC_PRIOR_REPLICAS="1"
+    echo "ai-gateway-controller already scaled to 0; will resume to ${AIGC_PRIOR_REPLICAS} after handoff"
+    return 0
+  fi
+  echo "Pausing ai-gateway-controller (scale ${replicas} -> 0) during praxis handoff ..."
+  oc scale deployment "${AIGC_DEPLOYMENT}" -n "${AI_GATEWAY_CONTROLLER_NAMESPACE}" --replicas=0
+  oc rollout status deployment/"${AIGC_DEPLOYMENT}" -n "${AI_GATEWAY_CONTROLLER_NAMESPACE}" --timeout=180s
+  AIGC_PAUSED=true
+}
+
+_resume_ai_gateway_controller() {
+  [[ -n "${AIGC_PRIOR_REPLICAS:-}" ]] || return 0
+  if [[ "${AIGC_PRIOR_REPLICAS}" == "0" ]]; then
+    return 0
+  fi
+  echo "Resuming ai-gateway-controller (scale -> ${AIGC_PRIOR_REPLICAS}) ..."
+  oc scale deployment "${AIGC_DEPLOYMENT}" -n "${AI_GATEWAY_CONTROLLER_NAMESPACE}" \
+    --replicas="${AIGC_PRIOR_REPLICAS}"
+  oc rollout status deployment/"${AIGC_DEPLOYMENT}" -n "${AI_GATEWAY_CONTROLLER_NAMESPACE}" --timeout=180s || true
+  AIGC_PAUSED=false
+  AIGC_PRIOR_REPLICAS=""
 }
 
 _tenant_config_namespace() {
@@ -319,13 +364,12 @@ _select_praxis_on_default_tenant() {
   fi
 
   # aigc only reads these from MaasTenantConfig (never AITenant). Select ExtProc
-  # with type=praxis and clear payload-processing-status in the same write:
-  # EnsurePraxisMayDeploy only keeps the deploy gate closed while the status is
-  # absent — both cleanup-complete and steady release aigc. A re-run (or any
-  # prior handoff) leaves the annotation behind, so without this clear aigc
-  # would create its own (same-named) payload-processing while
-  # _delete_legacy_ipp_in_gateway_namespace is still waiting for the legacy one
-  # to disappear. type=praxis is also the signal for maas-controller to stop
+  # with type=praxis and clear payload-processing-status in the same write.
+  # Caller must pause aigc first: EnsurePraxisMayDeploy treats both
+  # cleanup-complete and steady as ready, so a live aigc would race legacy IPP
+  # removal. With aigc paused, maas-controller may still rewrite absent →
+  # cleanup-complete (SkipIPP cleanup); that is fine — only steady means the
+  # peer already claimed. type=praxis also tells maas-controller to stop
   # managing the legacy IPP, so it will not recreate it during the delete.
   echo "Annotating MaasTenantConfig ${ns}/${MAAS_TENANT_CONFIG_NAME}: type=praxis, clearing payload-processing-status ..."
   oc annotate maastenantconfig "${MAAS_TENANT_CONFIG_NAME}" -n "${ns}" \
@@ -342,11 +386,15 @@ _select_praxis_on_default_tenant() {
   fi
   status="$(oc get maastenantconfig "${MAAS_TENANT_CONFIG_NAME}" -n "${ns}" \
     -o jsonpath='{.metadata.annotations.maas\.opendatahub\.io/payload-processing-status}' 2>/dev/null || true)"
-  if [[ -n "${status}" ]]; then
-    echo "ERROR: payload-processing-status is still '${status}'; the praxis deploy gate would be open during legacy IPP removal" >&2
+  if [[ "${status}" == "steady" ]]; then
+    echo "ERROR: payload-processing-status is still 'steady'; pause aigc before select so it cannot reclaim during legacy IPP removal" >&2
     return 1
   fi
-  echo "MaasTenantConfig praxis selected: type=${type}, status=<absent> (deploy gate closed)"
+  if [[ -z "${status}" ]]; then
+    echo "MaasTenantConfig praxis selected: type=${type}, status=<absent> (aigc paused; deploy gate closed)"
+  else
+    echo "MaasTenantConfig praxis selected: type=${type}, status=${status} (aigc paused; maas may have signaled cleanup-complete)"
+  fi
 }
 
 _clear_praxis_cleanup_on_default_tenant() {
@@ -408,19 +456,19 @@ echo "  namespace: ${AI_GATEWAY_CONTROLLER_NAMESPACE}"
 echo "  gateway: ${GATEWAY_NAMESPACE}/${GATEWAY_NAME}"
 echo "  remove maas IPP: ${REMOVE_MAAS_IPP}"
 
-# Apply the controller first so it is watching when the tenant opts in.
-# Then select praxis (type=praxis) with payload-processing-status cleared — that
-# absent status is what holds aigc's deploy gate closed — and remove the legacy
-# IPP; only after the delete converges do we set cleanup-complete, releasing
-# aigc to create the shared payload-processing. Leaving a carried-over status in
-# place races aigc's (same-named) create against the legacy-removal
-# convergence check.
+# Apply the controller first (RBAC/CRDs/Deployment), then pause it for the
+# handoff window. Select praxis and clear/replace status while aigc cannot
+# claim steady; remove legacy IPP; set cleanup-complete; resume aigc so it
+# creates the shared payload-processing. Leaving aigc running during the clear
+# races reclaim (steady) against legacy-removal convergence (MaaS #1579/#1649).
 _apply_ai_gateway_controller
 
 if [[ "${REMOVE_MAAS_IPP}" == "true" ]]; then
+  _pause_ai_gateway_controller
   _select_praxis_on_default_tenant
   _delete_legacy_ipp_in_gateway_namespace
   _clear_praxis_cleanup_on_default_tenant
+  _resume_ai_gateway_controller
   _wait_for_aigc_praxis_reconcile
   _wait_for_praxis_extproc
   _protect_praxis_from_maas_reconcile
