@@ -1908,16 +1908,8 @@ func TestReconcileAppliesCandidateTransportBeforePublishingRandomSelection(t *te
 	}
 }
 
-func TestReconcileRejectsUnequalWeightsBeforeTransportOrPublication(t *testing.T) {
+func TestReconcileAcceptsUnequalWeightsAndPublishesWeightedRandom(t *testing.T) {
 	r, model := reconcilerFixture(t)
-	var providerA v1alpha1.ExternalProvider
-	if err := r.Get(context.Background(), client.ObjectKey{Namespace: model.Namespace, Name: "provider"}, &providerA); err != nil {
-		t.Fatal(err)
-	}
-	providerA.Status.Phase = resolver.PhaseReady
-	if err := r.Status().Update(context.Background(), &providerA); err != nil {
-		t.Fatal(err)
-	}
 	providerB := &v1alpha1.ExternalProvider{
 		ObjectMeta: metav1.ObjectMeta{Name: "provider-b", Namespace: model.Namespace, UID: "provider-b-uid"},
 		Spec: v1alpha1.ExternalProviderSpec{Provider: "openai", Endpoint: "b.example.com",
@@ -1933,35 +1925,57 @@ func TestReconcileRejectsUnequalWeightsBeforeTransportOrPublication(t *testing.T
 	}); err != nil {
 		t.Fatal(err)
 	}
-	unequalWeight := 2
-	model.Spec.ExternalProviderRefs = append(model.Spec.ExternalProviderRefs, v1alpha1.ExternalProviderRef{
-		Ref: v1alpha1.ExternalProviderReference{Name: "provider-b"}, TargetModel: "gpt-b", APIFormat: "openai-chat",
-		Path: "/v1/chat/completions", Weight: &unequalWeight,
-	})
+	if _, err := r.ReconcileProvider(context.Background(), reconcile.Request{NamespacedName: client.ObjectKeyFromObject(providerB)}); err != nil {
+		t.Fatalf("ReconcileProvider provider-b: %v", err)
+	}
+	weightEighty, weightTwenty := 80, 20
+	model.Spec.ExternalProviderRefs = []v1alpha1.ExternalProviderRef{
+		{Ref: v1alpha1.ExternalProviderReference{Name: "provider"}, TargetModel: "gpt", APIFormat: "openai-chat",
+			Path: "/v1/chat/completions", Weight: &weightEighty},
+		{Ref: v1alpha1.ExternalProviderReference{Name: "provider-b"}, TargetModel: "gpt-b", APIFormat: "openai-chat",
+			Path: "/v1/chat/completions", Weight: &weightTwenty},
+	}
 	if err := r.Update(context.Background(), model); err != nil {
 		t.Fatal(err)
 	}
 	r.KnownClusters = append(r.KnownClusters, "provider-provider-b")
-	transportApplied, overlayPublished := false, false
-	r.ApplyResource = func(context.Context, client.Client, unstructured.Unstructured) error {
-		transportApplied = true
-		return nil
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKeyFromObject(model)}); err != nil {
+		t.Fatalf("Reconcile error = %v, want success for unequal weights", err)
 	}
-	r.PublishOverlay = func(context.Context, *resolver.ResolvedRouteSet, envelope.Scope, envelope.Options) (publisher.Result, error) {
-		overlayPublished = true
-		return publisher.Result{}, nil
+	var published corev1.ConfigMap
+	if err := r.Get(context.Background(), client.ObjectKey{Namespace: model.Namespace, Name: "routing-overlay"}, &published); err != nil {
+		t.Fatal(err)
 	}
-	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKeyFromObject(model)})
-	if !errors.Is(err, envelope.ErrWeightUnsupported) {
-		t.Fatalf("Reconcile error = %v, want WeightUnsupported", err)
+	var env envelope.Envelope
+	if err := json.Unmarshal([]byte(published.Data["routing-overlay.json"]), &env); err != nil {
+		t.Fatal(err)
 	}
-	if transportApplied || overlayPublished {
-		t.Fatalf("unsupported weights changed serving resources: transportApplied=%t overlayPublished=%t",
-			transportApplied, overlayPublished)
+	var policy struct {
+		Mode string `json:"mode"`
+	}
+	if err := json.Unmarshal(env.Overlay.SelectionPolicy, &policy); err != nil || policy.Mode != "weightedRandom" || len(env.Overlay.Candidates) != 2 {
+		t.Fatalf("overlay = policy %s candidates %#v, want weightedRandom with two candidates (err=%v)",
+			env.Overlay.SelectionPolicy, env.Overlay.Candidates, err)
+	}
+	want := map[string]uint32{"provider-provider": 80, "provider-provider-b": 20}
+	for _, candidate := range env.Overlay.Candidates {
+		if candidate.SelectionGroup == nil || *candidate.SelectionGroup != 0 {
+			t.Fatalf("candidate %s selection_group = %v, want 0", candidate.Cluster, candidate.SelectionGroup)
+		}
+		if candidate.TrafficWeight == nil || *candidate.TrafficWeight != want[candidate.Cluster] {
+			t.Fatalf("candidate %s traffic_weight = %v, want %d", candidate.Cluster, candidate.TrafficWeight, want[candidate.Cluster])
+		}
+	}
+	var got v1alpha1.ExternalModel
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(model), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.Phase != resolver.PhaseReady {
+		t.Fatalf("model phase = %q, want Ready", got.Status.Phase)
 	}
 }
 
-func TestUnequalWeightModelDoesNotFailOrBlockHealthySiblingDeletion(t *testing.T) {
+func TestUnequalWeightModelStaysReadyBesideHealthySibling(t *testing.T) {
 	ctx := context.Background()
 	r, healthy := reconcilerFixture(t)
 	providerB := &v1alpha1.ExternalProvider{
@@ -1981,18 +1995,22 @@ func TestUnequalWeightModelDoesNotFailOrBlockHealthySiblingDeletion(t *testing.T
 		t.Fatalf("ReconcileProvider provider-b: %v", err)
 	}
 	weightOne, weightTwo := 1, 2
-	bad := healthy.DeepCopy()
-	bad.Name, bad.UID, bad.ResourceVersion = "bad", "bad-uid", ""
-	bad.Status = v1alpha1.ExternalModelStatus{}
-	bad.Spec.ExternalProviderRefs = []v1alpha1.ExternalProviderRef{
+	weighted := healthy.DeepCopy()
+	weighted.Name, weighted.UID, weighted.ResourceVersion = "weighted", "weighted-uid", ""
+	weighted.Status = v1alpha1.ExternalModelStatus{}
+	weighted.Spec.ExternalProviderRefs = []v1alpha1.ExternalProviderRef{
 		{Ref: v1alpha1.ExternalProviderReference{Name: "provider"}, TargetModel: "gpt", APIFormat: "openai-chat", Path: "/v1/chat/completions", Weight: &weightOne},
 		{Ref: v1alpha1.ExternalProviderReference{Name: "provider-b"}, TargetModel: "gpt-b", APIFormat: "openai-chat", Path: "/v1/chat/completions", Weight: &weightTwo},
 	}
-	if err := r.Create(ctx, bad); err != nil {
+	if err := r.Create(ctx, weighted); err != nil {
 		t.Fatal(err)
 	}
+	r.KnownClusters = append(r.KnownClusters, "provider-provider-b")
+	if _, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(weighted)}); err != nil {
+		t.Fatalf("unequal-weight model reconciliation failed: %v", err)
+	}
 	if _, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(healthy)}); err != nil {
-		t.Fatalf("healthy sibling reconciliation failed due to invalid weights: %v", err)
+		t.Fatalf("healthy sibling reconciliation failed: %v", err)
 	}
 	var published corev1.ConfigMap
 	if err := r.Get(ctx, client.ObjectKey{Namespace: healthy.Namespace, Name: "routing-overlay"}, &published); err != nil {
@@ -2002,124 +2020,107 @@ func TestUnequalWeightModelDoesNotFailOrBlockHealthySiblingDeletion(t *testing.T
 	if err := json.Unmarshal([]byte(published.Data["routing-overlay.json"]), &overlay); err != nil {
 		t.Fatal(err)
 	}
-	if len(overlay.Overlay.Candidates) != 1 || overlay.Overlay.Candidates[0].Name != healthy.Name {
-		t.Fatalf("published candidates = %#v, want only healthy model", overlay.Overlay.Candidates)
+	if len(overlay.Overlay.Candidates) < 2 {
+		t.Fatalf("published candidates = %#v, want both models", overlay.Overlay.Candidates)
 	}
-	var gotBad v1alpha1.ExternalModel
-	if err := r.Get(ctx, client.ObjectKeyFromObject(bad), &gotBad); err != nil {
-		t.Fatal(err)
+	for _, model := range []*v1alpha1.ExternalModel{healthy, weighted} {
+		var got v1alpha1.ExternalModel
+		if err := r.Get(ctx, client.ObjectKeyFromObject(model), &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Status.Phase != resolver.PhaseReady {
+			t.Fatalf("model %s phase = %q, want Ready", model.Name, got.Status.Phase)
+		}
 	}
-	if gotBad.Status.Phase != "Failed" {
-		t.Fatalf("invalid model phase = %q, want Failed", gotBad.Status.Phase)
-	}
-	var gotHealthy v1alpha1.ExternalModel
-	if err := r.Get(ctx, client.ObjectKeyFromObject(healthy), &gotHealthy); err != nil {
-		t.Fatal(err)
-	}
-	if gotHealthy.Status.Phase != resolver.PhaseReady {
-		t.Fatalf("healthy model phase = %q, want Ready", gotHealthy.Status.Phase)
-	}
-	if err := r.Delete(ctx, &gotHealthy); err != nil {
+	if err := r.Delete(ctx, healthy); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(healthy)}); err != nil {
-		t.Fatalf("healthy sibling deletion blocked by invalid weights: %v", err)
+		t.Fatalf("healthy sibling deletion blocked: %v", err)
 	}
-	if err := r.Get(ctx, client.ObjectKeyFromObject(healthy), &gotHealthy); !apierrors.IsNotFound(err) {
+	if err := r.Get(ctx, client.ObjectKeyFromObject(healthy), &v1alpha1.ExternalModel{}); !apierrors.IsNotFound(err) {
 		t.Fatalf("deleted healthy model still exists: %v", err)
-	}
-	if err := r.Get(ctx, client.ObjectKey{Namespace: healthy.Namespace, Name: "routing-overlay"}, &published); !apierrors.IsNotFound(err) {
-		t.Fatalf("stale overlay remains after healthy sibling deletion: %v", err)
 	}
 }
 
-func TestCrossModelSelectionConflictsDoNotBlockUnrelatedModel(t *testing.T) {
-	weightOne, weightTwo := 1, 2
-	for _, tc := range []struct {
-		name       string
-		firstRefs  []v1alpha1.ExternalProviderRef
-		secondRefs []v1alpha1.ExternalProviderRef
-		wantErr    error
-	}{
-		{name: "unequal weights", firstRefs: []v1alpha1.ExternalProviderRef{{Ref: v1alpha1.ExternalProviderReference{Name: "provider"}, Weight: &weightOne}},
-			secondRefs: []v1alpha1.ExternalProviderRef{{Ref: v1alpha1.ExternalProviderReference{Name: "provider-b"}, Weight: &weightTwo}}, wantErr: envelope.ErrWeightUnsupported},
-		{name: "repeated provider", firstRefs: []v1alpha1.ExternalProviderRef{{Ref: v1alpha1.ExternalProviderReference{Name: "provider"}}, {Ref: v1alpha1.ExternalProviderReference{Name: "provider-b"}}},
-			secondRefs: []v1alpha1.ExternalProviderRef{{Ref: v1alpha1.ExternalProviderReference{Name: "provider"}}}, wantErr: envelope.ErrDuplicateProvider},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
-			r, healthy := reconcilerFixture(t)
-			providerB := &v1alpha1.ExternalProvider{ObjectMeta: metav1.ObjectMeta{Name: "provider-b", Namespace: healthy.Namespace, UID: "provider-b-uid"},
-				Spec: v1alpha1.ExternalProviderSpec{Provider: "openai", Endpoint: "b.example.com",
-					Auth: v1alpha1.AuthConfig{Type: "apikey", SecretRef: v1alpha1.NameReference{Name: "provider-b-credentials"}}},
-				Status: v1alpha1.ExternalProviderStatus{Phase: resolver.PhaseReady}}
-			if err := r.Create(ctx, providerB); err != nil {
-				t.Fatal(err)
-			}
-			if err := r.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "provider-b-credentials", Namespace: healthy.Namespace},
-				Data: map[string][]byte{"api-key": []byte("fixture-only-secret")}}); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := r.ReconcileProvider(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(providerB)}); err != nil {
-				t.Fatalf("ReconcileProvider provider-b: %v", err)
-			}
-			newAlias := func(name string, refs []v1alpha1.ExternalProviderRef) *v1alpha1.ExternalModel {
-				for i := range refs {
-					refs[i].TargetModel, refs[i].APIFormat, refs[i].Path = "gpt", "openai-chat", "/v1/chat/completions"
-				}
-				return &v1alpha1.ExternalModel{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: healthy.Namespace, UID: types.UID(name + "-uid")},
-					Spec: v1alpha1.ExternalModelSpec{ModelName: "shared", ExternalProviderRefs: refs}}
-			}
-			first, second := newAlias("first", tc.firstRefs), newAlias("second", tc.secondRefs)
-			for _, model := range []*v1alpha1.ExternalModel{first, second} {
-				if err := r.Create(ctx, model); err != nil {
-					t.Fatal(err)
-				}
-			}
-			r.KnownClusters = append(r.KnownClusters, "provider-provider-b")
-			if _, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(healthy)}); err != nil {
-				t.Fatalf("unrelated model reconciliation failed: %v", err)
-			}
-			var overlay corev1.ConfigMap
-			if err := r.Get(ctx, client.ObjectKey{Namespace: healthy.Namespace, Name: "routing-overlay"}, &overlay); err != nil {
-				t.Fatal(err)
-			}
-			var published envelope.Envelope
-			if err := json.Unmarshal([]byte(overlay.Data["routing-overlay.json"]), &published); err != nil {
-				t.Fatal(err)
-			}
-			if len(published.Overlay.Candidates) != 1 || published.Overlay.Candidates[0].Name != healthy.Name {
-				t.Fatalf("unrelated model overlay candidates = %#v", published.Overlay.Candidates)
-			}
-			for _, model := range []*v1alpha1.ExternalModel{first, second} {
-				var got v1alpha1.ExternalModel
-				if err := r.Get(ctx, client.ObjectKeyFromObject(model), &got); err != nil {
-					t.Fatal(err)
-				}
-				if got.Status.Phase != "Failed" {
-					t.Fatalf("conflicting model status = %#v, want %v", got.Status, tc.wantErr)
-				}
-			}
-			if _, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(first)}); !errors.Is(err, tc.wantErr) {
-				t.Fatalf("conflicting model error = %v, want %v", err, tc.wantErr)
-			}
-			var current v1alpha1.ExternalModel
-			if err := r.Get(ctx, client.ObjectKeyFromObject(healthy), &current); err != nil {
-				t.Fatal(err)
-			}
-			if current.Status.Phase != resolver.PhaseReady {
-				t.Fatalf("unrelated model phase = %q, want Ready", current.Status.Phase)
-			}
-			if err := r.Delete(ctx, &current); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(healthy)}); err != nil {
-				t.Fatalf("unrelated model deletion blocked: %v", err)
-			}
-			if err := r.Get(ctx, client.ObjectKeyFromObject(healthy), &current); !apierrors.IsNotFound(err) {
-				t.Fatalf("unrelated model remains after deletion: %v", err)
-			}
-		})
+func TestCrossModelDuplicateProviderDoesNotBlockUnrelatedModel(t *testing.T) {
+	ctx := context.Background()
+	r, healthy := reconcilerFixture(t)
+	providerB := &v1alpha1.ExternalProvider{ObjectMeta: metav1.ObjectMeta{Name: "provider-b", Namespace: healthy.Namespace, UID: "provider-b-uid"},
+		Spec: v1alpha1.ExternalProviderSpec{Provider: "openai", Endpoint: "b.example.com",
+			Auth: v1alpha1.AuthConfig{Type: "apikey", SecretRef: v1alpha1.NameReference{Name: "provider-b-credentials"}}},
+		Status: v1alpha1.ExternalProviderStatus{Phase: resolver.PhaseReady}}
+	if err := r.Create(ctx, providerB); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "provider-b-credentials", Namespace: healthy.Namespace},
+		Data: map[string][]byte{"api-key": []byte("fixture-only-secret")}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.ReconcileProvider(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(providerB)}); err != nil {
+		t.Fatalf("ReconcileProvider provider-b: %v", err)
+	}
+	newAlias := func(name string, refs []v1alpha1.ExternalProviderRef) *v1alpha1.ExternalModel {
+		for i := range refs {
+			refs[i].TargetModel, refs[i].APIFormat, refs[i].Path = "gpt", "openai-chat", "/v1/chat/completions"
+		}
+		return &v1alpha1.ExternalModel{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: healthy.Namespace, UID: types.UID(name + "-uid")},
+			Spec: v1alpha1.ExternalModelSpec{ModelName: "shared", ExternalProviderRefs: refs}}
+	}
+	first := newAlias("first", []v1alpha1.ExternalProviderRef{
+		{Ref: v1alpha1.ExternalProviderReference{Name: "provider"}},
+		{Ref: v1alpha1.ExternalProviderReference{Name: "provider-b"}},
+	})
+	second := newAlias("second", []v1alpha1.ExternalProviderRef{
+		{Ref: v1alpha1.ExternalProviderReference{Name: "provider"}},
+	})
+	for _, model := range []*v1alpha1.ExternalModel{first, second} {
+		if err := r.Create(ctx, model); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r.KnownClusters = append(r.KnownClusters, "provider-provider-b")
+	if _, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(healthy)}); err != nil {
+		t.Fatalf("unrelated model reconciliation failed: %v", err)
+	}
+	var overlay corev1.ConfigMap
+	if err := r.Get(ctx, client.ObjectKey{Namespace: healthy.Namespace, Name: "routing-overlay"}, &overlay); err != nil {
+		t.Fatal(err)
+	}
+	var published envelope.Envelope
+	if err := json.Unmarshal([]byte(overlay.Data["routing-overlay.json"]), &published); err != nil {
+		t.Fatal(err)
+	}
+	if len(published.Overlay.Candidates) != 1 || published.Overlay.Candidates[0].Name != healthy.Name {
+		t.Fatalf("unrelated model overlay candidates = %#v", published.Overlay.Candidates)
+	}
+	for _, model := range []*v1alpha1.ExternalModel{first, second} {
+		var got v1alpha1.ExternalModel
+		if err := r.Get(ctx, client.ObjectKeyFromObject(model), &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Status.Phase != "Failed" {
+			t.Fatalf("conflicting model status = %#v, want Failed", got.Status)
+		}
+	}
+	if _, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(first)}); !errors.Is(err, envelope.ErrDuplicateProvider) {
+		t.Fatalf("conflicting model error = %v, want ErrDuplicateProvider", err)
+	}
+	var current v1alpha1.ExternalModel
+	if err := r.Get(ctx, client.ObjectKeyFromObject(healthy), &current); err != nil {
+		t.Fatal(err)
+	}
+	if current.Status.Phase != resolver.PhaseReady {
+		t.Fatalf("unrelated model phase = %q, want Ready", current.Status.Phase)
+	}
+	if err := r.Delete(ctx, &current); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(healthy)}); err != nil {
+		t.Fatalf("unrelated model deletion blocked: %v", err)
+	}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(healthy), &current); !apierrors.IsNotFound(err) {
+		t.Fatalf("unrelated model remains after deletion: %v", err)
 	}
 }
 
