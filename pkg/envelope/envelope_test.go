@@ -313,17 +313,19 @@ func TestRender_APIKeyMapsToReferenceOnlyBearerCredential(t *testing.T) {
 	}
 }
 
-func TestRender_WeightGuard(t *testing.T) {
+func TestRender_WeightSelection(t *testing.T) {
 	cases := []struct {
-		name    string
-		weights []int
-		wantErr bool
+		name       string
+		weights    []int
+		wantPolicy string
+		wantWeight bool
 	}{
-		{"uniform nil-normalized", []int{1, 1}, false},
-		{"uniform equal nonzero", []int{2, 2}, false},
-		{"single provider any weight", []int{7}, false},
-		{"non-uniform 70/30", []int{70, 30}, true},
-		{"non-uniform 2/1", []int{2, 1}, true},
+		{"uniform nil-normalized", []int{1, 1}, `{"mode":"random"}`, false},
+		{"uniform equal nonzero", []int{2, 2}, `{"mode":"random"}`, false},
+		{"single provider any weight", []int{7}, "", false},
+		{"non-uniform 70/30", []int{70, 30}, `{"mode":"weightedRandom"}`, true},
+		{"non-uniform 2/1", []int{2, 1}, `{"mode":"weightedRandom"}`, true},
+		{"non-uniform 80/20", []int{80, 20}, `{"mode":"weightedRandom"}`, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -331,31 +333,47 @@ func TestRender_WeightGuard(t *testing.T) {
 			for i, w := range tc.weights {
 				routes = append(routes, route("m1", string(rune('a'+i)), w))
 			}
-			_, err := Render(routeSet(resolver.ModelRoutes{ModelRef: "ns1/m1", Routes: routes}), scope(), Revision{}, Options{})
-			if tc.wantErr {
-				if !errors.Is(err, ErrWeightUnsupported) {
-					t.Fatalf("weights %v: want ErrWeightUnsupported, got %v", tc.weights, err)
-				}
-				if !strings.Contains(err.Error(), "ns1/m1") {
-					t.Errorf("error must name the model: %v", err)
-				}
-			} else if err != nil {
+			env, err := Render(routeSet(resolver.ModelRoutes{ModelRef: "ns1/m1", Routes: routes}), scope(), Revision{}, Options{})
+			if err != nil {
 				t.Fatalf("weights %v: unexpected error %v", tc.weights, err)
+			}
+			if string(env.Overlay.SelectionPolicy) != tc.wantPolicy {
+				t.Fatalf("weights %v: selection_policy = %s, want %s", tc.weights, env.Overlay.SelectionPolicy, tc.wantPolicy)
+			}
+			for i, candidate := range env.Overlay.Candidates {
+				if tc.wantWeight {
+					if candidate.SelectionGroup == nil || *candidate.SelectionGroup != 0 {
+						t.Fatalf("candidate %d selection_group = %v, want 0", i, candidate.SelectionGroup)
+					}
+					if candidate.TrafficWeight == nil || int(*candidate.TrafficWeight) != tc.weights[i] {
+						t.Fatalf("candidate %d traffic_weight = %v, want %d", i, candidate.TrafficWeight, tc.weights[i])
+					}
+				} else if candidate.TrafficWeight != nil {
+					t.Fatalf("candidate %d traffic_weight = %v, want omitted", i, candidate.TrafficWeight)
+				}
 			}
 		})
 	}
 }
 
-func TestRender_WeightGuardIsPerModel(t *testing.T) {
-	// Model A uniform, model B non-uniform → whole render refused (one
-	// envelope, one source — a bad model must not ship a partial envelope).
+func TestRender_UnequalWeightForcesWeightedRandomOnSiblingModels(t *testing.T) {
+	// Model A uniform, model B unequal → whole overlay uses weightedRandom
+	// because Praxis allows only one selection_policy.mode.
 	set := routeSet(
 		resolver.ModelRoutes{ModelRef: "ns1/a", Routes: []resolver.Route{route("a", "p1", 1), route("a", "p2", 1)}},
 		resolver.ModelRoutes{ModelRef: "ns1/b", Routes: []resolver.Route{route("b", "p1", 7), route("b", "p2", 3)}},
 	)
-	_, err := Render(set, scope(), Revision{}, Options{})
-	if !errors.Is(err, ErrWeightUnsupported) {
-		t.Fatalf("want ErrWeightUnsupported from model b, got %v", err)
+	env, err := Render(set, scope(), Revision{}, Options{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if string(env.Overlay.SelectionPolicy) != `{"mode":"weightedRandom"}` {
+		t.Fatalf("selection_policy = %s, want weightedRandom", env.Overlay.SelectionPolicy)
+	}
+	for _, candidate := range env.Overlay.Candidates {
+		if candidate.SelectionGroup == nil || candidate.TrafficWeight == nil {
+			t.Fatalf("weightedRandom candidate missing group/weight: %+v", candidate)
+		}
 	}
 }
 
@@ -466,13 +484,53 @@ func TestRender_RandomGroupsAreScopedPerClientModel(t *testing.T) {
 	}
 }
 
-func TestRender_RejectsUnequalWeightsAcrossSameClientModel(t *testing.T) {
+func TestRender_UnequalWeightsAcrossSameClientModelUseWeightedRandom(t *testing.T) {
 	set := routeSet(
 		resolver.ModelRoutes{ModelRef: "ns1/a", Routes: []resolver.Route{route("shared", "p1", 2)}},
 		resolver.ModelRoutes{ModelRef: "ns1/b", Routes: []resolver.Route{route("shared", "p2", 1)}},
 	)
-	if _, err := Render(set, scope(), Revision{}, Options{}); !errors.Is(err, ErrWeightUnsupported) {
-		t.Fatalf("Render error = %v, want ErrWeightUnsupported", err)
+	env, err := Render(set, scope(), Revision{}, Options{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if string(env.Overlay.SelectionPolicy) != `{"mode":"weightedRandom"}` {
+		t.Fatalf("selection_policy = %s, want weightedRandom", env.Overlay.SelectionPolicy)
+	}
+	want := map[string]uint32{"provider-p1": 2, "provider-p2": 1}
+	for _, candidate := range env.Overlay.Candidates {
+		if candidate.SelectionGroup == nil || *candidate.SelectionGroup != 0 {
+			t.Fatalf("candidate %s selection_group = %v, want 0", candidate.Cluster, candidate.SelectionGroup)
+		}
+		if candidate.TrafficWeight == nil || *candidate.TrafficWeight != want[candidate.Cluster] {
+			t.Fatalf("candidate %s traffic_weight = %v, want %d", candidate.Cluster, candidate.TrafficWeight, want[candidate.Cluster])
+		}
+	}
+}
+
+func TestRender_WeightChangeBumpsDigest(t *testing.T) {
+	equal := routeSet(resolver.ModelRoutes{ModelRef: "ns1/m1", Routes: []resolver.Route{route("m1", "p1", 1), route("m1", "p2", 1)}})
+	first, err := Render(equal, scope(), Revision{}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unequal := routeSet(resolver.ModelRoutes{ModelRef: "ns1/m1", Routes: []resolver.Route{route("m1", "p1", 80), route("m1", "p2", 20)}})
+	changed, err := Render(unequal, scope(), Revision{Generation: first.Provenance.SourceGeneration, Digest: first.Revision.Value}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed.Revision.Value == first.Revision.Value {
+		t.Fatal("weight change must bump content digest")
+	}
+	if changed.Provenance.SourceGeneration != first.Provenance.SourceGeneration+1 {
+		t.Fatalf("generation = %d, want %d", changed.Provenance.SourceGeneration, first.Provenance.SourceGeneration+1)
+	}
+	noop, err := Render(unequal, scope(), Revision{Generation: changed.Provenance.SourceGeneration, Digest: changed.Revision.Value}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if noop.Provenance.SourceGeneration != changed.Provenance.SourceGeneration || noop.Revision.Value != changed.Revision.Value {
+		t.Fatalf("identical weighted overlay must keep generation/digest: got %d/%s want %d/%s",
+			noop.Provenance.SourceGeneration, noop.Revision.Value, changed.Provenance.SourceGeneration, changed.Revision.Value)
 	}
 }
 
