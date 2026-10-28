@@ -561,6 +561,12 @@ func (r *Reconciler) reconcileHomeModel(ctx context.Context, req reconcile.Reque
 		} else if revoked {
 			err = nil
 		}
+		// An explicit all-zero weight update is an administrative withdrawal,
+		// not a provider-readiness failure. Let the no-route cleanup below
+		// remove the previous selection instead of preserving it as LKG.
+		if errors.Is(err, resolver.ErrNoRoutes) && allRoutesExplicitlyWeightDisabled(set) {
+			err = nil
+		}
 	}
 	if err != nil {
 		return r.handleHomeRouteResolutionError(ctx, req.Namespace, modelTenant, set, model.Name, string(model.UID), err, report)
@@ -1697,6 +1703,23 @@ func excludeUnsupportedModelSelection(set *resolver.ResolvedRouteSet) (*resolver
 		}
 	}
 	return valid, rejected
+}
+
+func allRoutesExplicitlyWeightDisabled(set *resolver.ResolvedRouteSet) bool {
+	if set == nil || len(set.Models) == 0 {
+		return false
+	}
+	for _, model := range set.Models {
+		if len(model.Routes) != 0 || len(model.Skips) == 0 {
+			return false
+		}
+		for _, skip := range model.Skips {
+			if skip.Reason != resolver.SkipWeightDisabled {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (r *Reconciler) validateModelRouteSet(ctx context.Context, set *resolver.ResolvedRouteSet,
