@@ -1383,7 +1383,7 @@ def gateway_request(session=None):
     }
 
 
-def sample(name, a_min=35, a_max=65, b_min=35, b_max=65, label="roughly_even_split"):
+def sample(name, a_min=35, a_max=65, b_min=35, b_max=65, label="roughly_even_split", require_a_gt_b=False):
     a = b = failures = 0
     status_counts = {}
     for _ in range(100):
@@ -1396,12 +1396,15 @@ def sample(name, a_min=35, a_max=65, b_min=35, b_max=65, label="roughly_even_spl
         else:
             b += 1
     # Broad bands absorb ordinary random variation while still catching
-    # uniform-vs-proportional skew (equal: 35–65; 80/20: prefer A).
+    # uniform-vs-proportional skew (equal: 35–65; 80/20: prefer A and a > b).
     biased = a_min <= a <= a_max and b_min <= b <= b_max
+    if require_a_gt_b:
+        biased = biased and a > b
     result = {"name": name, "requests": 100, "proof_a": a, "proof_b": b, "failures": failures,
               "status_counts": status_counts,
               "strict_https_sni_authority_credential": True,
-              label: biased, "accepted_proof_a": f"{a_min}-{a_max}", "accepted_proof_b": f"{b_min}-{b_max}"}
+              label: biased, "a_gt_b": a > b,
+              "accepted_proof_a": f"{a_min}-{a_max}", "accepted_proof_b": f"{b_min}-{b_max}"}
     RESULT["samples"].append(result)
     write_json(EVIDENCE / "results.json", RESULT)
     record(name, failures == 0 and biased, str(result))
@@ -1741,7 +1744,8 @@ def main():
            and {c.get("selection_group") for c in weighted["candidates"]} == {0},
            json.dumps({"selection_policy": weighted["selection_policy"], "traffic_weights": weights},
                       sort_keys=True))
-    sample("sample_unequal_80_20", a_min=55, a_max=95, b_min=5, b_max=45, label="roughly_proportional_80_20")
+    sample("sample_unequal_80_20", a_min=55, a_max=95, b_min=5, b_max=45,
+           label="roughly_proportional_80_20", require_a_gt_b=True)
 
     # weight 0 disables the second provider while keeping the ref.
     set_refs([ref_a, make_ref("provider-proof-b", 0)])
