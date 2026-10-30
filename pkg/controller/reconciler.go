@@ -676,6 +676,11 @@ func (r *Reconciler) reconcileHomeModel(ctx context.Context, req reconcile.Reque
 		// keep serving.
 		return reconcile.Result{}, report(false, reasonProviderNotReady, message, nil)
 	}
+	if explicitlyWeightDisabledModels(set)[req.Namespace+"/"+req.Name] {
+		// A healthy sibling can keep the tenant overlay alive, but this model
+		// itself has no eligible providers and must not remain Ready.
+		return reconcile.Result{}, report(false, reasonNoRoutes, "all ExternalModel provider references are explicitly disabled by weight", nil)
+	}
 
 	message := fmt.Sprintf("distributed routing overlay digest %s generation %d", result.Envelope.Revision.Value, result.Envelope.Provenance.SourceGeneration)
 	if err := report(true, reasonReconciled, message, &result.Envelope); err != nil {
@@ -713,9 +718,15 @@ func (r *Reconciler) handleHomeRouteResolutionError(
 		if len(skips) > 0 {
 			message = "no routable ExternalModel provider remains: " + strings.Join(skips, "; ")
 		}
-		policyExcluded := translationPolicyExcludedModels(set)
-		if len(policyExcluded) > 0 {
-			if policyExcluded[namespace+"/"+modelName] {
+		excluded := translationPolicyExcludedModels(set)
+		disabledByWeight := explicitlyWeightDisabledModels(set)
+		for modelRef := range disabledByWeight {
+			excluded[modelRef] = true
+		}
+		if len(excluded) > 0 {
+			if disabledByWeight[namespace+"/"+modelName] {
+				reason = reasonNoRoutes
+			} else if excluded[namespace+"/"+modelName] {
 				reason = reasonTranslationDisabled
 			}
 			valid, err := r.livePraxisBeforeWrite(ctx, namespace, modelTenant)
@@ -733,7 +744,7 @@ func (r *Reconciler) handleHomeRouteResolutionError(
 			home := attachmentTenant{namespace: namespace, tenantID: tenant.ID(modelTenant.aitenant.GetName()),
 				gateway:               v1alpha1.NamespacedObjectReference{Name: modelTenant.gatewayName, Namespace: modelTenant.gatewayNamespace},
 				apiTranslationEnabled: modelTenant.apiTranslationEnabled}
-			if err := r.cleanupPolicyExcludedHomeModels(ctx, home, set, policyExcluded, sourceUID); err != nil {
+			if err := r.cleanupExcludedHomeModels(ctx, home, set, excluded, sourceUID); err != nil {
 				return reconcile.Result{}, err
 			}
 			return reconcile.Result{}, routeErr
@@ -1181,10 +1192,11 @@ func translationPolicyExcludedModels(set *resolver.ResolvedRouteSet) map[string]
 	return excluded
 }
 
-// cleanupPolicyExcludedHomeModels removes only routes made ineligible by the
-// tenant's API-translation policy. Other models with provider/readiness errors
-// keep their last-known route patches and overlay candidates.
-func (r *Reconciler) cleanupPolicyExcludedHomeModels(
+// cleanupExcludedHomeModels removes only candidates made ineligible by an
+// explicit model-local policy, such as disabled API translation or an
+// all-zero provider weight. Other models with provider/readiness errors keep
+// their last-known route patches and overlay candidates.
+func (r *Reconciler) cleanupExcludedHomeModels(
 	ctx context.Context,
 	home attachmentTenant,
 	set *resolver.ResolvedRouteSet,
@@ -1752,20 +1764,31 @@ func excludeUnsupportedModelSelection(set *resolver.ResolvedRouteSet) (*resolver
 }
 
 func allRoutesExplicitlyWeightDisabled(set *resolver.ResolvedRouteSet) bool {
-	if set == nil || len(set.Models) == 0 {
-		return false
+	disabled := explicitlyWeightDisabledModels(set)
+	return set != nil && len(set.Models) > 0 && len(disabled) == len(set.Models)
+}
+
+func explicitlyWeightDisabledModels(set *resolver.ResolvedRouteSet) map[string]bool {
+	disabled := make(map[string]bool)
+	if set == nil {
+		return disabled
 	}
 	for _, model := range set.Models {
 		if len(model.Routes) != 0 || len(model.Skips) == 0 {
-			return false
+			continue
 		}
+		allDisabled := true
 		for _, skip := range model.Skips {
 			if skip.Reason != resolver.SkipWeightDisabled {
-				return false
+				allDisabled = false
+				break
 			}
 		}
+		if allDisabled {
+			disabled[model.ModelRef] = true
+		}
 	}
-	return true
+	return disabled
 }
 
 func (r *Reconciler) validateModelRouteSet(ctx context.Context, set *resolver.ResolvedRouteSet,
