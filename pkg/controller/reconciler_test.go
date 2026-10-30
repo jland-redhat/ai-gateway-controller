@@ -1945,6 +1945,51 @@ func TestReconcileAcceptsUnequalWeightsAndPublishesWeightedRandom(t *testing.T) 
 	}
 }
 
+func TestReconcileAllZeroWeightsWithdrawsPreviouslyPublishedRoute(t *testing.T) {
+	ctx := context.Background()
+	r, model := reconcilerFixture(t)
+	req := reconcile.Request{NamespacedName: client.ObjectKeyFromObject(model)}
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatalf("initial serving reconcile: %v", err)
+	}
+	var overlay corev1.ConfigMap
+	if err := r.Get(ctx, client.ObjectKey{Namespace: model.Namespace, Name: "routing-overlay"}, &overlay); err != nil {
+		t.Fatalf("initial serving overlay: %v", err)
+	}
+	route := &unstructured.Unstructured{}
+	route.SetGroupVersionKind(schema.GroupVersionKind{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "HTTPRoute"})
+	if err := r.Get(ctx, client.ObjectKey{Namespace: model.Namespace, Name: modelRouteName(model.Name)}, route); err != nil {
+		t.Fatalf("initial serving HTTPRoute: %v", err)
+	}
+	var current v1alpha1.ExternalModel
+	if err := r.Get(ctx, client.ObjectKeyFromObject(model), &current); err != nil {
+		t.Fatal(err)
+	}
+	zero := 0
+	current.Spec.ExternalProviderRefs[0].Weight = &zero
+	if err := r.Update(ctx, &current); err != nil {
+		t.Fatalf("set all provider weights to zero: %v", err)
+	}
+	if _, err := r.Reconcile(ctx, req); !errors.Is(err, resolver.ErrNoRoutes) {
+		t.Fatalf("all-zero reconcile = %v, want ErrNoRoutes", err)
+	}
+	var residualOverlay corev1.ConfigMap
+	if err := r.Get(ctx, client.ObjectKey{Namespace: model.Namespace, Name: "routing-overlay"}, &residualOverlay); !apierrors.IsNotFound(err) {
+		t.Fatalf("overlay after all-zero update = err %v, labels %v, annotations %v, data %v; want NotFound",
+			err, residualOverlay.Labels, residualOverlay.Annotations, residualOverlay.Data)
+	}
+	if err := r.Get(ctx, client.ObjectKey{Namespace: model.Namespace, Name: modelRouteName(model.Name)}, route); !apierrors.IsNotFound(err) {
+		t.Fatalf("HTTPRoute after all-zero update = %v, want NotFound", err)
+	}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(model), &current); err != nil {
+		t.Fatal(err)
+	}
+	if current.Status.Phase != "Failed" || current.Status.ObservedGeneration != current.Generation ||
+		!hasConditionReason(current.Status.Conditions, conditionReady, reasonNoRoutes) {
+		t.Fatalf("all-zero ExternalModel status = %#v, want current generation Failed with Ready=False/NoRoutes", current.Status)
+	}
+}
+
 func TestUnequalWeightModelStaysReadyBesideHealthySibling(t *testing.T) {
 	ctx := context.Background()
 	r, healthy := reconcilerFixture(t)

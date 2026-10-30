@@ -102,6 +102,59 @@ Replace `<run-id>` consistently. The normal qualification does not apply the
 optional OpenAI resources; that workflow must opt in explicitly through its
 documented OpenAI command path.
 
+### Static ExternalModel provider-weight qualification
+
+The control-plane renderer consumes `ExternalProviderRef.weight` and writes
+selection metadata to the same content-addressed Praxis overlay used by normal
+ExternalModel requests. Praxis `intelligent_route` chooses the destination;
+Envoy forwards to the selected provider. Configured positive integer weights
+are relative and passed through as `traffic_weight`; equal weights use
+`random`, unequal weights use `weightedRandom`, and zero-weight bindings are
+omitted from serving candidates while remaining preloaded for administrative
+updates. Multiplying every weight by a common factor preserves the intended
+share, but changes the published overlay bytes and revision because the raw
+configured values are part of the contract.
+
+After the base `e2e.sh` passes, run the focused static-weight suite on that same
+fresh cluster. The suite creates three credential-enforcing HTTPS provider
+recorders, first makes a one-request receipt-storage smoke probe, and then
+checks 50:50, 50:25:25, equivalent 2:1:1, 100:0 followed by an explicit 0:100
+update, and a 95:5 canary. It sends 500 requests for each measured
+distribution (50:50, 50:25:25, and 95:5), and 50 for each direction of the
+100:0 to 0:100 administrative switch. The 2:1:1 case verifies the converged
+rendered weights and ratio equivalence without repeating the traffic sample.
+It also sets every provider weight to zero, waits for the current generation
+to report `Ready=False/NoRoutes` and for the model route and overlay candidate
+to be withdrawn, then sends one request and requires no provider attribution
+or backend receipt. Re-enabling Provider A must restore the serving route and
+produce one successful request with exactly one verified Provider A receipt.
+Each sample uses unique request IDs, at most eight concurrent requests, and one
+independently retrieved TLS-verified backend receipt per response. The three
+distribution windows use fixed Pearson goodness-of-fit cutoffs at alpha 0.001
+per window (family-wise false-rejection bound at most 0.003). Failed requests
+are reported separately. The serving configuration is captured before and
+after each sample window. No sample uses session affinity. These tests
+establish static allocation only; they do not establish health-based failover
+or automatic promotion.
+
+```sh
+: "${LOCAL_ENV_CLUSTER:?Set to the cluster used for the base qualification}"
+: "${LOCAL_ENV_EVIDENCE_ROOT:?Set to the base qualification evidence directory}"
+
+LOCAL_ENV_WEIGHT_EVIDENCE="$LOCAL_ENV_EVIDENCE_ROOT/weights" \
+  python3 ./e2e-static-provider-weights.py
+
+./demo.sh --context "kind-$LOCAL_ENV_CLUSTER" --non-interactive
+./run.sh --destroy
+```
+
+Run this command block from `test/kind-env`. It assumes the cluster was just provisioned and the base
+`e2e.sh` passed. Keep the same run ID and context for the base suite, weighted
+suite, demo, and teardown. The weighted suite restores the original
+ExternalModel provider references, waits for the Provider A serving revision,
+checks the reset request, revokes its temporary MaaS key, and removes only its
+owned recorder resources. The final destroy remains ownership-checked.
+
 ### Shared External Model resources
 
 The reusable Provider A/B identities, optional `gpt-4o-mini` OpenAI CR chain,

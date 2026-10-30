@@ -377,6 +377,95 @@ func TestRender_UnequalWeightForcesWeightedRandomOnSiblingModels(t *testing.T) {
 	}
 }
 
+func TestRender_WeightedRandomNormalizesMixedCapabilitiesAndPreservesContributions(t *testing.T) {
+	group := uint32(0)
+	weightNine, weightThree := uint32(9), uint32(3)
+	preserved := []Candidate{
+		{Cluster: "preserved-equal-a", StableID: "other/equal-a", Kind: "inference_model", Name: "preserved-equal", Site: "site-a", Fresh: true, SelectionGroup: &group},
+		{Cluster: "preserved-equal-b", StableID: "other/equal-b", Kind: "inference_model", Name: "preserved-equal", Site: "site-a", Fresh: true, SelectionGroup: &group},
+		{Cluster: "preserved-weighted-a", StableID: "other/weighted-a", Kind: "inference_model", Name: "preserved-weighted", Site: "site-a", Fresh: true, SelectionGroup: &group, TrafficWeight: &weightNine},
+		{Cluster: "preserved-weighted-b", StableID: "other/weighted-b", Kind: "inference_model", Name: "preserved-weighted", Site: "site-a", Fresh: true, SelectionGroup: &group, TrafficWeight: &weightThree},
+	}
+	routes := routeSet(
+		resolver.ModelRoutes{ModelRef: "ns1/weighted", Routes: []resolver.Route{route("weighted", "a", 50), route("weighted", "b", 25), route("weighted", "c", 25)}},
+		resolver.ModelRoutes{ModelRef: "ns1/equal", Routes: []resolver.Route{route("equal", "d", 7), route("equal", "e", 7)}},
+		resolver.ModelRoutes{ModelRef: "ns1/single", Routes: []resolver.Route{route("single", "f", 4)}},
+	)
+	env, err := Render(routes, scope(), Revision{}, Options{PreservedCandidates: preserved})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if string(env.Overlay.SelectionPolicy) != `{"mode":"weightedRandom"}` {
+		t.Fatalf("selection_policy = %s, want weightedRandom", env.Overlay.SelectionPolicy)
+	}
+	weightsByStableID := map[string]uint32{
+		"weighted/provider-a": 50, "weighted/provider-b": 25, "weighted/provider-c": 25,
+		"equal/provider-d": 7, "equal/provider-e": 7, "single/provider-f": 4,
+		"other/equal-a": 1, "other/equal-b": 1,
+		"other/weighted-a": 9, "other/weighted-b": 3,
+	}
+	if len(env.Overlay.Candidates) != len(weightsByStableID) {
+		t.Fatalf("candidate count = %d, want %d", len(env.Overlay.Candidates), len(weightsByStableID))
+	}
+	for _, candidate := range env.Overlay.Candidates {
+		want, ok := weightsByStableID[candidate.StableID]
+		if !ok {
+			t.Fatalf("unexpected candidate: %+v", candidate)
+		}
+		if candidate.SelectionGroup == nil || *candidate.SelectionGroup != 0 {
+			t.Errorf("candidate %s selection_group = %v, want 0", candidate.StableID, candidate.SelectionGroup)
+		}
+		if candidate.TrafficWeight == nil || *candidate.TrafficWeight != want {
+			got := "<nil>"
+			if candidate.TrafficWeight != nil {
+				got = strconv.FormatUint(uint64(*candidate.TrafficWeight), 10)
+			}
+			t.Errorf("candidate %s traffic_weight = %s, want %d", candidate.StableID, got, want)
+		}
+	}
+}
+
+func TestRender_SelectionPolicyTransitionsOutOfWeightedRandom(t *testing.T) {
+	weighted := routeSet(resolver.ModelRoutes{ModelRef: "ns1/model", Routes: []resolver.Route{
+		route("model", "a", 80), route("model", "b", 20),
+	}})
+	first, err := Render(weighted, scope(), Revision{}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(first.Overlay.SelectionPolicy) != `{"mode":"weightedRandom"}` {
+		t.Fatalf("initial policy = %s, want weightedRandom", first.Overlay.SelectionPolicy)
+	}
+	equal := routeSet(resolver.ModelRoutes{ModelRef: "ns1/model", Routes: []resolver.Route{
+		route("model", "a", 4), route("model", "b", 4),
+	}})
+	second, err := Render(equal, scope(), Revision{Generation: first.Provenance.SourceGeneration, Digest: first.Revision.Value}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(second.Overlay.SelectionPolicy) != `{"mode":"random"}` || second.Provenance.SourceGeneration != first.Provenance.SourceGeneration+1 {
+		t.Fatalf("weighted->equal policy/generation = %s/%d, want random/%d", second.Overlay.SelectionPolicy,
+			second.Provenance.SourceGeneration, first.Provenance.SourceGeneration+1)
+	}
+	for _, candidate := range second.Overlay.Candidates {
+		if candidate.SelectionGroup == nil || candidate.TrafficWeight != nil {
+			t.Fatalf("equal candidate retained weighted metadata after policy transition: %+v", candidate)
+		}
+	}
+	single := routeSet(resolver.ModelRoutes{ModelRef: "ns1/model", Routes: []resolver.Route{route("model", "a", 4)}})
+	third, err := Render(single, scope(), Revision{Generation: second.Provenance.SourceGeneration, Digest: second.Revision.Value}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(third.Overlay.SelectionPolicy) != 0 || third.Provenance.SourceGeneration != second.Provenance.SourceGeneration+1 {
+		t.Fatalf("equal->singleton policy/generation = %s/%d, want no policy/%d", third.Overlay.SelectionPolicy,
+			third.Provenance.SourceGeneration, second.Provenance.SourceGeneration+1)
+	}
+	if third.Overlay.Candidates[0].SelectionGroup != nil || third.Overlay.Candidates[0].TrafficWeight != nil {
+		t.Fatalf("singleton retained selection metadata: %+v", third.Overlay.Candidates[0])
+	}
+}
+
 func TestRender_EqualProvidersUseRandomGroupZero(t *testing.T) {
 	for _, count := range []int{1, 2, 3} {
 		t.Run(strconv.Itoa(count)+"-providers", func(t *testing.T) {
