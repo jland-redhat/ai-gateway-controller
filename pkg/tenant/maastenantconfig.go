@@ -81,6 +81,60 @@ func APITranslationEnabled(mtc *unstructured.Unstructured) (bool, error) {
 	return flag, nil
 }
 
+
+// DefaultExtProcMaxBodyBytes is the ExtProc server.max_body_bytes ceiling when
+// MaasTenantConfig.spec.payloadProcessing.maxBodyBytes is omitted. This bounds
+// ExtProc accumulation, not Envoy's HTTP buffer filter.
+const DefaultExtProcMaxBodyBytes int64 = 10485760
+
+// PayloadProcessingMaxBodyBytes reads the ExtProc accumulation ceiling from
+// MaasTenantConfig.spec.payloadProcessing.maxBodyBytes. Omission defaults to
+// DefaultExtProcMaxBodyBytes. Malformed or non-positive values fail closed.
+func PayloadProcessingMaxBodyBytes(mtc *unstructured.Unstructured) (int64, error) {
+	if mtc == nil {
+		return 0, errors.New("MaasTenantConfig is required to read payloadProcessing.maxBodyBytes")
+	}
+	value, found, err := unstructured.NestedFieldNoCopy(mtc.Object, "spec", "payloadProcessing", "maxBodyBytes")
+	if err != nil {
+		return 0, fmt.Errorf("read spec.payloadProcessing.maxBodyBytes: %w", err)
+	}
+	if !found {
+		return DefaultExtProcMaxBodyBytes, nil
+	}
+	n, ok := asPositiveInt64(value)
+	if !ok {
+		return 0, fmt.Errorf("spec.payloadProcessing.maxBodyBytes must be an integer >= 1, got %T (%v)", value, value)
+	}
+	return n, nil
+}
+
+func asPositiveInt64(value any) (int64, bool) {
+	switch n := value.(type) {
+	case int64:
+		if n < 1 {
+			return 0, false
+		}
+		return n, true
+	case int32:
+		if n < 1 {
+			return 0, false
+		}
+		return int64(n), true
+	case int:
+		if n < 1 {
+			return 0, false
+		}
+		return int64(n), true
+	case float64:
+		if n < 1 || n != float64(int64(n)) {
+			return 0, false
+		}
+		return int64(n), true
+	default:
+		return 0, false
+	}
+}
+
 // IdentifierFor derives the per-tenant resource-naming identifier from
 // a MaasTenantConfig's labels, mirroring maas-controller's
 // tenantreconcile.TenantIdentifierFor: the default/legacy tenant (unlabeled,
