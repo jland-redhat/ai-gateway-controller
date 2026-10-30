@@ -123,19 +123,33 @@ update, and a 95:5 canary. It sends 500 requests for each measured
 distribution (50:50, 50:25:25, and 95:5), and 50 for each direction of the
 100:0 to 0:100 administrative switch. The 2:1:1 case verifies the converged
 rendered weights and ratio equivalence without repeating the traffic sample.
-It also sets every provider weight to zero, waits for the current generation
-to report `Ready=False/NoRoutes` and for the model route and overlay candidate
-to be withdrawn, then sends one request and requires no provider attribution
-or backend receipt. Re-enabling Provider A must restore the serving route and
-produce one successful request with exactly one verified Provider A receipt.
+It then validates all-zero withdrawal as a sequential scenario. With all
+providers Ready, it proves attributed traffic, withdraws all routes, and proves
+that requests return 404 without a backend receipt before restoring serving.
+It repeats the sequence with Provider B first unready, and then absent; each
+case requires a fresh request-backed baseline through the remaining healthy
+providers before withdrawal. Each case restores B and verifies serving again.
+Finally, it withdraws one all-zero model beside a healthy sibling and checks
+that only the target route/candidate disappears while the sibling keeps serving.
 Each sample uses unique request IDs, at most eight concurrent requests, and one
 independently retrieved TLS-verified backend receipt per response. The three
 distribution windows use fixed Pearson goodness-of-fit cutoffs at alpha 0.001
 per window (family-wise false-rejection bound at most 0.003). Failed requests
 are reported separately. The serving configuration is captured before and
-after each sample window. No sample uses session affinity. These tests
+after each sample window. A traffic sample starts only after the published,
+mounted, accepted, and serving overlay revisions agree. No sample uses session
+affinity. These tests
 establish static allocation only; they do not establish health-based failover
 or automatic promotion.
+
+Use `--withdrawal-only` to run just the ready, unready, missing-provider, and
+healthy-sibling all-zero scenarios. The separate `--switch-diagnostic-only`
+mode attempts to record 50 uniquely identified requests if it observes an
+A-to-B overlay update mounted while the prior ExtProc revision is still
+serving; it also captures matching Gateway access-log lines. This deliberately
+probes an in-flight transition for diagnosis and is not part of the normal
+qualification pass. If that interval is not observed, the result records that
+limit and still verifies serving after convergence.
 
 ```sh
 : "${LOCAL_ENV_CLUSTER:?Set to the cluster used for the base qualification}"
@@ -143,6 +157,10 @@ or automatic promotion.
 
 LOCAL_ENV_WEIGHT_EVIDENCE="$LOCAL_ENV_EVIDENCE_ROOT/weights" \
   python3 ./e2e-static-provider-weights.py
+
+# Optional isolated diagnostics on that same run-owned cluster:
+LOCAL_ENV_WEIGHT_EVIDENCE="$LOCAL_ENV_EVIDENCE_ROOT/weight-transition-diagnostics" \
+  python3 ./e2e-static-provider-weights.py --switch-diagnostic-only
 
 ./demo.sh --context "kind-$LOCAL_ENV_CLUSTER" --non-interactive
 ./run.sh --destroy
