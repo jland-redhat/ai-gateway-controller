@@ -81,15 +81,21 @@ func APITranslationEnabled(mtc *unstructured.Unstructured) (bool, error) {
 	return flag, nil
 }
 
-
 // DefaultExtProcMaxBodyBytes is the ExtProc server.max_body_bytes ceiling when
 // MaasTenantConfig.spec.payloadProcessing.maxBodyBytes is omitted. This bounds
 // ExtProc accumulation, not Envoy's HTTP buffer filter.
 const DefaultExtProcMaxBodyBytes int64 = 10485760
 
+// MaxExtProcMaxBodyBytes is the hard upper bound for
+// MaasTenantConfig.spec.payloadProcessing.maxBodyBytes (100 MiB). Values above
+// this are rejected so a misconfigured tenant cannot ask ExtProc to accumulate
+// an attacker-sized body. Keep in sync with the owning MaaS CRD schema maximum.
+const MaxExtProcMaxBodyBytes int64 = 104857600
+
 // PayloadProcessingMaxBodyBytes reads the ExtProc accumulation ceiling from
 // MaasTenantConfig.spec.payloadProcessing.maxBodyBytes. Omission defaults to
-// DefaultExtProcMaxBodyBytes. Malformed or non-positive values fail closed.
+// DefaultExtProcMaxBodyBytes. Malformed, non-positive, or above-max values fail
+// closed.
 func PayloadProcessingMaxBodyBytes(mtc *unstructured.Unstructured) (int64, error) {
 	if mtc == nil {
 		return 0, errors.New("MaasTenantConfig is required to read payloadProcessing.maxBodyBytes")
@@ -104,6 +110,9 @@ func PayloadProcessingMaxBodyBytes(mtc *unstructured.Unstructured) (int64, error
 	n, ok := asPositiveInt64(value)
 	if !ok {
 		return 0, fmt.Errorf("spec.payloadProcessing.maxBodyBytes must be an integer >= 1, got %T (%v)", value, value)
+	}
+	if n > MaxExtProcMaxBodyBytes {
+		return 0, fmt.Errorf("spec.payloadProcessing.maxBodyBytes must be <= %d, got %d", MaxExtProcMaxBodyBytes, n)
 	}
 	return n, nil
 }

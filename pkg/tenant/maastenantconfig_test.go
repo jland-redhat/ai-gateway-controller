@@ -178,9 +178,11 @@ func TestPayloadProcessingMaxBodyBytes(t *testing.T) {
 		{name: "absent defaults to 10MiB", want: DefaultExtProcMaxBodyBytes},
 		{name: "payloadProcessing without field defaults", spec: map[string]any{"payloadProcessing": map[string]any{"replicas": int64(2)}}, want: DefaultExtProcMaxBodyBytes},
 		{name: "explicit override", spec: map[string]any{"payloadProcessing": map[string]any{"maxBodyBytes": int64(20971520)}}, want: 20971520},
+		{name: "at maximum accepted", spec: map[string]any{"payloadProcessing": map[string]any{"maxBodyBytes": MaxExtProcMaxBodyBytes}}, want: MaxExtProcMaxBodyBytes},
 		{name: "json float integer accepted", spec: map[string]any{"payloadProcessing": map[string]any{"maxBodyBytes": float64(10485760)}}, want: DefaultExtProcMaxBodyBytes},
 		{name: "zero rejected", spec: map[string]any{"payloadProcessing": map[string]any{"maxBodyBytes": int64(0)}}, wantErr: true},
 		{name: "negative rejected", spec: map[string]any{"payloadProcessing": map[string]any{"maxBodyBytes": int64(-1)}}, wantErr: true},
+		{name: "above maximum rejected", spec: map[string]any{"payloadProcessing": map[string]any{"maxBodyBytes": MaxExtProcMaxBodyBytes + 1}}, wantErr: true},
 		{name: "string rejected", spec: map[string]any{"payloadProcessing": map[string]any{"maxBodyBytes": "10Mi"}}, wantErr: true},
 	}
 	for _, tc := range cases {
