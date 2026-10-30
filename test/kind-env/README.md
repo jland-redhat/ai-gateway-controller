@@ -293,7 +293,7 @@ When translation is enabled, the selected-provider request filter applies a
 1 MiB limit before model validation and target-model rewriting, including for
 OpenAI-compatible candidates; larger requests are rejected before the upstream
 provider. The dedicated ExtProc process always uses a body accumulation
-ceiling via `server.max_body_bytes` (default 10 MiB from
+ceiling via `server.max_body_bytes` (default 10 MiB, maximum 100 MiB from
 `MaasTenantConfig.spec.payloadProcessing.maxBodyBytes`; this is ExtProc
 accumulation, not Envoy's HTTP buffer). The Kind request-limit probe currently
 observes Envoy's preselection 413 before the request reaches Praxis, so it does
