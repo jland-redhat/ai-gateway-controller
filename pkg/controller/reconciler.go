@@ -1287,9 +1287,13 @@ func (r *Reconciler) cleanupExcludedHomeModels(
 	if err != nil {
 		return fmt.Errorf("read current overlay candidates before translation-policy cleanup: %w", err)
 	}
+	excludedScopedIDs, err := r.excludedScopedCandidateIDs(ctx, home.namespace, excluded)
+	if err != nil {
+		return err
+	}
 	keptCandidates := make([]envelope.Candidate, 0, len(candidates))
 	for _, candidate := range candidates {
-		policyExcluded := false
+		policyExcluded := excludedScopedIDs[candidate.StableID]
 		for modelRef := range excluded {
 			modelNamespace, modelName, found := strings.Cut(modelRef, "/")
 			if found && modelNamespace == home.namespace && strings.HasPrefix(candidate.StableID, modelName+"/provider-") {
@@ -2644,3 +2648,25 @@ func providerSelectionSink(route resolver.Route, namespace string) unstructured.
 
 var _ client.Object = (*v1alpha1.ExternalModel)(nil)
 var _ client.Object = (*v1alpha1.ExternalProvider)(nil)
+
+// excludedScopedCandidateIDs derives scoped identities from provider references,
+// including hashed identities, without conflating shared client-visible names.
+func (r *Reconciler) excludedScopedCandidateIDs(ctx context.Context, namespace string, excluded map[string]bool) (map[string]bool, error) {
+	ids := make(map[string]bool)
+	for modelRef := range excluded {
+		modelNamespace, modelName, found := strings.Cut(modelRef, "/")
+		if !found || modelNamespace != namespace {
+			continue
+		}
+		var model v1alpha1.ExternalModel
+		if err := r.APIReader.Get(ctx, client.ObjectKey{Namespace: modelNamespace, Name: modelName}, &model); err != nil {
+			return nil, fmt.Errorf("read excluded model %s to identify scoped candidates: %w", modelRef, err)
+		}
+		for _, ref := range model.Spec.ExternalProviderRefs {
+			if ref.Ref.Namespace != "" && ref.Ref.Namespace != modelNamespace {
+				ids[envelope.ScopedStableID(modelNamespace, modelName, ref.Ref.Namespace, ref.Ref.Name)] = true
+			}
+		}
+	}
+	return ids, nil
+}

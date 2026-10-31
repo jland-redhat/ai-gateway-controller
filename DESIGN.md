@@ -60,8 +60,11 @@ single eligible provider remains deterministic. Repeating the same provider
 across `ExternalModel` objects with the same client-visible model name is
 rejected; otherwise that provider would receive extra selection entries. This
 does not add controller/ExtProc rollout coordination, health-aware selection,
-or retries. Final-provider withdrawal and empty-overlay behavior remain
-outside this change in issue #106. Partial provider withdrawal ordering
+or retries. An explicit all-zero weight update withdraws the model's route
+and overlay candidates and reports `Ready=False/NoRoutes`, even when a
+referenced provider is missing or unready. Unrelated models retain their
+serving state. Readiness-driven final-provider withdrawal remains tracked in
+issue #106. Partial provider withdrawal ordering
 remains a separate issue tracked in
 [#108](https://github.com/opendatahub-io/ai-gateway-controller/issues/108).
 Requires a Praxis ExtProc / AI image that accepts `weightedRandom` and

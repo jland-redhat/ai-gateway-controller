@@ -4081,3 +4081,100 @@ func TestProviderTenantReadinessMessageAbsentMaasTenantConfig(t *testing.T) {
 		t.Fatalf("message = %q", msg)
 	}
 }
+
+func TestAllZeroScopedModelWithdrawalPreservesSameAliasSiblingLastKnownGood(t *testing.T) {
+	ctx := context.Background()
+	r, model, sibling, providerB := reconcilerWithSiblingProvider(t)
+	r.Namespace = ""
+	shared, secret := attachmentProvider("shared")
+	r.KnownClusters = append(r.KnownClusters, (resolver.Route{Namespace: model.Namespace, ProviderNamespace: shared.Namespace, Provider: shared.Name}).ServiceName())
+	grant := referenceGrant("shared", model.Namespace, shared.Name)
+	for _, obj := range []client.Object{shared, secret, grant} {
+		if err := r.Create(ctx, obj); err != nil {
+			t.Fatal(err)
+		}
+	}
+	model.Spec.ModelName = "shared-client-alias"
+	model.Spec.ExternalProviderRefs = []v1alpha1.ExternalProviderRef{{
+		Ref:         v1alpha1.ExternalProviderReference{Name: shared.Name, Namespace: shared.Namespace},
+		TargetModel: "gpt", APIFormat: "openai-chat", Path: "/v1/chat/completions",
+	}}
+	sibling.Spec.ModelName = model.Spec.ModelName
+	for _, m := range []*v1alpha1.ExternalModel{model, sibling} {
+		if err := r.Update(ctx, m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, m := range []*v1alpha1.ExternalModel{model, sibling} {
+		reconcileModel(t, r, m)
+	}
+	expectedScoped := envelope.ScopedStableID(model.Namespace, model.Name, shared.Namespace, shared.Name)
+	before := overlayEnvelope(t, r, model.Namespace)
+	found := false
+	for _, candidate := range before.Overlay.Candidates {
+		found = found || candidate.StableID == expectedScoped
+	}
+	if !found || len(before.Overlay.Candidates) != 2 {
+		t.Fatalf("initial overlay must include scoped model and same-alias sibling: %#v", before.Overlay.Candidates)
+	}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(providerB), providerB); err != nil {
+		t.Fatal(err)
+	}
+	providerB.Status.Phase = "Pending"
+	providerB.Status.Conditions = []metav1.Condition{{Type: conditionReady, Status: metav1.ConditionFalse, Reason: "Reconciling", Message: "temporary failure", LastTransitionTime: metav1.Now()}}
+	if err := r.Status().Update(ctx, providerB); err != nil {
+		t.Fatal(err)
+	}
+	var current v1alpha1.ExternalModel
+	if err := r.Get(ctx, client.ObjectKeyFromObject(model), &current); err != nil {
+		t.Fatal(err)
+	}
+	zero := 0
+	current.Spec.ExternalProviderRefs[0].Weight = &zero
+	if err := r.Update(ctx, &current); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(model)}); !errors.Is(err, resolver.ErrNoRoutes) {
+		t.Fatalf("withdrawal error=%v, want ErrNoRoutes", err)
+	}
+	after := overlayEnvelope(t, r, model.Namespace)
+	if len(after.Overlay.Candidates) != 1 || after.Overlay.Candidates[0].StableID != envelope.CandidateStableID(sibling.Name, providerB.Name) {
+		t.Fatalf("expected only sibling last-known candidate: %#v", after.Overlay.Candidates)
+	}
+	if _, err := getUnstructured(r, httpRouteGVK, model.Namespace, modelRouteName(model.Name)); !apierrors.IsNotFound(err) {
+		t.Fatalf("disabled route remains: %v", err)
+	}
+	if _, err := getUnstructured(r, httpRouteGVK, sibling.Namespace, modelRouteName(sibling.Name)); err != nil {
+		t.Fatalf("sibling route removed: %v", err)
+	}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(model), &current); err != nil {
+		t.Fatal(err)
+	}
+	if current.Status.Phase != "Failed" || current.Status.ObservedGeneration != current.Generation || !hasConditionReason(current.Status.Conditions, conditionReady, reasonNoRoutes) {
+		t.Fatalf("withdrawal status=%#v", current.Status)
+	}
+}
+
+func TestExcludedScopedCandidateIDsSupportHashedIdentitiesAndFailOnUnreadableModel(t *testing.T) {
+	ctx := context.Background()
+	model := &v1alpha1.ExternalModel{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-a", Name: strings.Repeat("m", 220)},
+		Spec: v1alpha1.ExternalModelSpec{ModelName: "alias", ExternalProviderRefs: []v1alpha1.ExternalProviderRef{{
+			Ref: v1alpha1.ExternalProviderReference{Namespace: "shared", Name: strings.Repeat("p", 60)},
+		}}},
+	}
+	r := controllerTestClient(t, model)
+	excluded := map[string]bool{model.Namespace + "/" + model.Name: true}
+	ids, err := r.excludedScopedCandidateIDs(ctx, model.Namespace, excluded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := envelope.ScopedStableID(model.Namespace, model.Name, "shared", strings.Repeat("p", 60))
+	if !strings.HasPrefix(expected, "sha256:") || len(ids) != 1 || !ids[expected] {
+		t.Fatalf("hashed candidate identity was not preserved: %#v", ids)
+	}
+	excluded[model.Namespace+"/missing"] = true
+	if _, err := r.excludedScopedCandidateIDs(ctx, model.Namespace, excluded); !apierrors.IsNotFound(err) {
+		t.Fatalf("unreadable excluded model must fail closed: %v", err)
+	}
+}
