@@ -953,9 +953,6 @@ const managedByLabel = "app.kubernetes.io/managed-by"
 func (r *Reconciler) waitForForeignOwnership(ctx context.Context, resources []unstructured.Unstructured) error {
 	for i := range resources {
 		desired := &resources[i]
-		if desired.GetKind() == "ClusterRole" && desired.GetName() == "payload-processing-reader" {
-			continue
-		}
 		current := &unstructured.Unstructured{}
 		current.SetGroupVersionKind(desired.GroupVersionKind())
 		if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(desired), current); err != nil {
@@ -1098,10 +1095,10 @@ func (r *Reconciler) removeFinalizer(ctx context.Context, mtc *unstructured.Unst
 // would have applied for tenantID in namespace, mirroring
 // tenantreconcile.cleanupTenantResources / cleanupPayloadProcessingHPA in
 // maas-controller: SSA only ever upserts the current render set, it never
-// deletes what falls out of it. The shared payload-processing-reader
-// ClusterRole is never deleted here: every tenant's ClusterRoleBinding
-// references that one role, so deleting it would break every other
-// praxis tenant sharing the cluster.
+// deletes what falls out of it. Leftover payload-processing-reader
+// ClusterRoleBindings from older installs are deleted per tenant; the
+// shared ClusterRole itself is left for the platform owner to remove
+// once no other consumer (legacy IPP) still references it.
 func (r *Reconciler) cleanup(ctx context.Context, tenantID, gatewayNamespace, tenantNamespace string) error {
 	type target struct {
 		gvk       schema.GroupVersionKind

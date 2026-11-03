@@ -33,10 +33,9 @@ import (
 // DestinationRule host/sni, ClusterRoleBinding subject) that would otherwise
 // still point at the unsuffixed names.
 //
-// The shared "payload-processing-reader" ClusterRole is intentionally left
-// untouched: every tenant's ClusterRoleBinding binds to that one shared
-// role, only the binding (and its subject) is per-tenant, mirroring
-// maas-controller's own IPP ClusterRole/ClusterRoleBinding split.
+// ExtProc ServiceAccounts intentionally carry no ClusterRoleBinding: the
+// workload mounts projected credentials and must not inherit the legacy
+// payload-processing-reader API grants.
 //
 // It does not mutate the input slice.
 func Rename(resources []unstructured.Unstructured, tenantID, namespace string) ([]unstructured.Unstructured, error) {
@@ -70,8 +69,6 @@ func renameOne(u *unstructured.Unstructured, tenantID, namespace string) error {
 		return setName(u, PayloadProcessingServiceAccountName(tenantID))
 	case kind == "NetworkPolicy" && name == PayloadProcessingName:
 		return renamePayloadProcessingNetworkPolicy(u, tenantID)
-	case kind == "ClusterRoleBinding" && name == PayloadProcessingReaderClusterRoleBindingName:
-		return renamePayloadProcessingReaderClusterRoleBinding(u, tenantID)
 	case kind == "EnvoyFilter" && name == PayloadProcessingName:
 		return renamePayloadProcessingEnvoyFilter(u, tenantID, namespace)
 	case kind == "EnvoyFilter" && name == PayloadProcessingExternalModelFilterName:
@@ -129,6 +126,9 @@ func renamePayloadProcessingDeployment(u *unstructured.Unstructured, tenantID st
 	if err := setConfigMapVolumeName(u, "plugins-config-volume", PayloadProcessingPluginsConfigMapForTenant(tenantID)); err != nil {
 		return fmt.Errorf("plugins ConfigMap volume: %w", err)
 	}
+	if err := setTLSSecretVolumeName(u, "tls", PayloadProcessingTLSSecretName(tenantID)); err != nil {
+		return fmt.Errorf("tls secret volume: %w", err)
+	}
 	return nil
 }
 
@@ -159,6 +159,9 @@ func renamePayloadPreProcessingDeployment(u *unstructured.Unstructured, tenantID
 	if err := setConfigMapVolumeName(u, "plugins-config-volume", PayloadProcessingPluginsConfigMapForTenant(tenantID)); err != nil {
 		return fmt.Errorf("plugins ConfigMap volume: %w", err)
 	}
+	if err := setTLSSecretVolumeName(u, "tls", PayloadPreProcessingTLSSecretName(tenantID)); err != nil {
+		return fmt.Errorf("tls secret volume: %w", err)
+	}
 	return nil
 }
 
@@ -170,6 +173,9 @@ func renamePayloadProcessingService(u *unstructured.Unstructured, tenantID strin
 	if err := setServiceSelector(u, map[string]string{"app": PayloadProcessingName, LabelTenantInstance: deploymentName}); err != nil {
 		return fmt.Errorf("selector: %w", err)
 	}
+	if err := setServingCertSecretName(u, PayloadProcessingTLSSecretName(tenantID)); err != nil {
+		return fmt.Errorf("serving-cert annotation: %w", err)
+	}
 	return nil
 }
 
@@ -180,6 +186,9 @@ func renamePayloadPreProcessingService(u *unstructured.Unstructured, tenantID st
 	deploymentName := PayloadPreProcessingDeploymentName(tenantID)
 	if err := setServiceSelector(u, map[string]string{"app": PayloadPreProcessingName, LabelTenantInstance: deploymentName}); err != nil {
 		return fmt.Errorf("selector: %w", err)
+	}
+	if err := setServingCertSecretName(u, PayloadPreProcessingTLSSecretName(tenantID)); err != nil {
+		return fmt.Errorf("serving-cert annotation: %w", err)
 	}
 	return nil
 }
@@ -207,29 +216,6 @@ func renamePayloadProcessingNetworkPolicy(u *unstructured.Unstructured, tenantID
 	}
 	if err := unstructured.SetNestedMap(u.Object, podSelector, "spec", "podSelector"); err != nil {
 		return fmt.Errorf("podSelector: %w", err)
-	}
-	return nil
-}
-
-func renamePayloadProcessingReaderClusterRoleBinding(u *unstructured.Unstructured, tenantID string) error {
-	if err := setName(u, PayloadProcessingReaderClusterRoleBindingNameForTenant(tenantID)); err != nil {
-		return err
-	}
-	subjects, found, err := unstructured.NestedSlice(u.Object, "subjects")
-	if err != nil {
-		return fmt.Errorf("read subjects: %w", err)
-	}
-	if !found || len(subjects) == 0 {
-		return errors.New("subjects not found")
-	}
-	subject, ok := subjects[0].(map[string]any)
-	if !ok {
-		return errors.New("subjects[0] is not an object")
-	}
-	subject["name"] = PayloadProcessingServiceAccountName(tenantID)
-	subjects[0] = subject
-	if err := unstructured.SetNestedSlice(u.Object, subjects, "subjects"); err != nil {
-		return fmt.Errorf("write subjects: %w", err)
 	}
 	return nil
 }
@@ -357,6 +343,28 @@ func setClusterUpstreamAddress(value map[string]any, fqdn string) error {
 	if err := unstructured.SetNestedField(value, fqdn, "transport_socket", "typed_config", "sni"); err != nil {
 		return fmt.Errorf("sni: %w", err)
 	}
+	if sans, found, err := unstructured.NestedSlice(value,
+		"transport_socket", "typed_config", "common_tls_context", "validation_context",
+		"match_typed_subject_alt_names"); err != nil {
+		return fmt.Errorf("read san matchers: %w", err)
+	} else if found && len(sans) > 0 {
+		san0, ok := sans[0].(map[string]any)
+		if !ok {
+			return errors.New("match_typed_subject_alt_names[0] is not an object")
+		}
+		matcher, ok := san0["matcher"].(map[string]any)
+		if !ok {
+			return errors.New("san matcher is not an object")
+		}
+		matcher["exact"] = fqdn
+		san0["matcher"] = matcher
+		sans[0] = san0
+		if err := unstructured.SetNestedSlice(value, sans,
+			"transport_socket", "typed_config", "common_tls_context", "validation_context",
+			"match_typed_subject_alt_names"); err != nil {
+			return fmt.Errorf("write san matchers: %w", err)
+		}
+	}
 
 	loadAssignment, ok := value["load_assignment"].(map[string]any)
 	if !ok {
@@ -470,4 +478,42 @@ func setConfigMapVolumeName(u *unstructured.Unstructured, volumeName, configMapN
 		return nil
 	}
 	return fmt.Errorf("volume %q not found", volumeName)
+}
+
+func setTLSSecretVolumeName(u *unstructured.Unstructured, volumeName, secretName string) error {
+	volumes, found, err := unstructured.NestedSlice(u.Object, "spec", "template", "spec", "volumes")
+	if err != nil {
+		return fmt.Errorf("read volumes: %w", err)
+	}
+	if !found {
+		return errors.New("volumes not found")
+	}
+	for i, raw := range volumes {
+		vol, ok := raw.(map[string]any)
+		if !ok || vol["name"] != volumeName {
+			continue
+		}
+		secret, ok := vol["secret"].(map[string]any)
+		if !ok {
+			return fmt.Errorf("volume %q has no secret", volumeName)
+		}
+		secret["secretName"] = secretName
+		vol["secret"] = secret
+		volumes[i] = vol
+		if err := unstructured.SetNestedSlice(u.Object, volumes, "spec", "template", "spec", "volumes"); err != nil {
+			return fmt.Errorf("write volumes: %w", err)
+		}
+		return nil
+	}
+	return fmt.Errorf("volume %q not found", volumeName)
+}
+
+func setServingCertSecretName(u *unstructured.Unstructured, secretName string) error {
+	annotations := u.GetAnnotations()
+	if annotations == nil {
+		annotations = map[string]string{}
+	}
+	annotations[servingCertSecretAnnotation] = secretName
+	u.SetAnnotations(annotations)
+	return nil
 }

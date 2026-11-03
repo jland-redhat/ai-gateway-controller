@@ -1,0 +1,278 @@
+diff --git a/base/config/configmap.yaml b/base/config/configmap.yaml
+index 506b306..b2f6a72 100644
+--- a/base/config/configmap.yaml
++++ b/base/config/configmap.yaml
+@@ -10,8 +10,11 @@ data:
+       grpc_address: "0.0.0.0:9004"
+       health_address: "0.0.0.0:50052"
+       metrics_address: "0.0.0.0:9090"
++      max_body_bytes: 10485760
+       tls:
+-        mode: self_signed
++        mode: provided
++        cert_path: /etc/tls/private/tls.crt
++        key_path: /etc/tls/private/tls.key
+ 
+     filter_chains:
+       - name: bbr
+@@ -30,17 +33,17 @@ data:
+           - filter: llmisvc_model_provider_resolver
+             header: X-Gateway-Model-Name
+ 
+-    insecure_options:
+-      allow_unbounded_body: true
+-
+   # Post-auth (IPP) Praxis chain: full processing pipeline.
+   extproc.yaml: |
+     server:
+       grpc_address: "0.0.0.0:9004"
+       health_address: "0.0.0.0:50052"
+       metrics_address: "0.0.0.0:9090"
++      max_body_bytes: 10485760
+       tls:
+-        mode: self_signed
++        mode: provided
++        cert_path: /etc/tls/private/tls.crt
++        key_path: /etc/tls/private/tls.key
+ 
+     filter_chains:
+       - name: ipp
+@@ -84,6 +87,3 @@ data:
+               - x-maas-return-all-models
+               - x-maas-model
+           - filter: request_id
+-
+-    insecure_options:
+-      allow_unbounded_body: true
+diff --git a/base/instance/deployment.yaml b/base/instance/deployment.yaml
+index 02811bb..dade7e8 100644
+--- a/base/instance/deployment.yaml
++++ b/base/instance/deployment.yaml
+@@ -12,6 +12,7 @@ spec:
+       labels:
+         app: payload-processing
+     spec:
++      automountServiceAccountToken: false
+       terminationGracePeriodSeconds: 30
+       securityContext:
+         runAsNonRoot: true
+@@ -67,7 +68,13 @@ spec:
+             - name: plugins-config-volume
+               mountPath: /etc/praxis
+               readOnly: true
++            - name: tls
++              mountPath: /etc/tls/private
++              readOnly: true
+       volumes:
+         - name: plugins-config-volume
+           configMap:
+             name: payload-processing-plugins
++        - name: tls
++          secret:
++            secretName: payload-processing-tls
+diff --git a/base/instance/service.yaml b/base/instance/service.yaml
+index 0119694..bc04d9e 100644
+--- a/base/instance/service.yaml
++++ b/base/instance/service.yaml
+@@ -2,6 +2,8 @@ apiVersion: v1
+ kind: Service
+ metadata:
+   name: payload-processing
++  annotations:
++    service.beta.openshift.io/serving-cert-secret-name: payload-processing-tls
+ spec:
+   selector:
+     app: payload-processing
+diff --git a/overlays/odh/after/destination-rule.yaml b/overlays/odh/after/destination-rule.yaml
+index 4ae018d..57dba04 100644
+--- a/overlays/odh/after/destination-rule.yaml
++++ b/overlays/odh/after/destination-rule.yaml
+@@ -7,7 +7,9 @@ spec:
+   trafficPolicy:
+     tls:
+       mode: SIMPLE
+-      insecureSkipVerify: true
++      # Verify the OpenShift service-serving certificate. The gateway's
++      # projected service-ca bundle trusts the signer.
++      caCertificates: /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt
+       # Explicit SNI required: without it Envoy uses the Istio cluster name
+       # (outbound|9004||...), which rustls rejects as an illegal hostname.
+       sni: payload-processing.openshift-ingress.svc.cluster.local
+diff --git a/overlays/odh/envoy-filter.yaml b/overlays/odh/envoy-filter.yaml
+index ecb3f12..c041122 100644
+--- a/overlays/odh/envoy-filter.yaml
++++ b/overlays/odh/envoy-filter.yaml
+@@ -418,11 +418,18 @@ spec:
+           type: STRICT_DNS
+           connect_timeout: 10s
+           lb_policy: ROUND_ROBIN
++          circuit_breakers:
++            thresholds:
++              - max_connections: 32
++                max_pending_requests: 32
++                max_requests: 32
++                max_retries: 3
+           typed_extension_protocol_options:
+             envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+               "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+               explicit_http_config:
+-                http2_protocol_options: {}
++                http2_protocol_options:
++                  max_concurrent_streams: 32
+           transport_socket:
+             name: envoy.transport_sockets.tls
+             typed_config:
+@@ -431,7 +438,12 @@ spec:
+               common_tls_context:
+                 alpn_protocols: ["h2"]
+                 validation_context:
+-                  trust_chain_verification: ACCEPT_UNTRUSTED
++                  trusted_ca:
++                    filename: /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt
++                  match_typed_subject_alt_names:
++                    - san_type: DNS
++                      matcher:
++                        exact: payload-pre-processing.openshift-ingress.svc.cluster.local
+           load_assignment:
+             cluster_name: payload-pre-processing-extproc
+             endpoints:
+@@ -451,11 +463,18 @@ spec:
+           type: STRICT_DNS
+           connect_timeout: 10s
+           lb_policy: ROUND_ROBIN
++          circuit_breakers:
++            thresholds:
++              - max_connections: 32
++                max_pending_requests: 32
++                max_requests: 32
++                max_retries: 3
+           typed_extension_protocol_options:
+             envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+               "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+               explicit_http_config:
+-                http2_protocol_options: {}
++                http2_protocol_options:
++                  max_concurrent_streams: 32
+           transport_socket:
+             name: envoy.transport_sockets.tls
+             typed_config:
+@@ -464,7 +483,12 @@ spec:
+               common_tls_context:
+                 alpn_protocols: ["h2"]
+                 validation_context:
+-                  trust_chain_verification: ACCEPT_UNTRUSTED
++                  trusted_ca:
++                    filename: /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt
++                  match_typed_subject_alt_names:
++                    - san_type: DNS
++                      matcher:
++                        exact: payload-processing.openshift-ingress.svc.cluster.local
+           load_assignment:
+             cluster_name: payload-processing-extproc
+             endpoints:
+diff --git a/overlays/odh/networking/networkpolicy.yaml b/overlays/odh/networking/networkpolicy.yaml
+index 746e84a..74d4cfc 100644
+--- a/overlays/odh/networking/networkpolicy.yaml
++++ b/overlays/odh/networking/networkpolicy.yaml
+@@ -2,7 +2,11 @@
+ #
+ # Required on OCP 4.22+ where openshift-ingress has a default deny-all
+ # NetworkPolicy. Without this, payload-processing pods cannot receive
+-# ext_proc traffic from the gateway or reach the Kubernetes API server.
++# ext_proc traffic from the gateway.
++#
++# API-server egress (443/6443) is intentionally omitted: ExtProc mounts
++# projected credentials and ConfigMaps as volumes and must not hold a
++# usable service-account token path to the apiserver.
+ apiVersion: networking.k8s.io/v1
+ kind: NetworkPolicy
+ metadata:
+@@ -56,9 +60,3 @@ spec:
+           port: 5353
+         - protocol: TCP
+           port: 5353
+-    # Kubernetes API server
+-    - ports:
+-        - protocol: TCP
+-          port: 443
+-        - protocol: TCP
+-          port: 6443
+diff --git a/overlays/odh/pre-processing/deployment-patch.yaml b/overlays/odh/pre-processing/deployment-patch.yaml
+index 083c54b..18e173a 100644
+--- a/overlays/odh/pre-processing/deployment-patch.yaml
++++ b/overlays/odh/pre-processing/deployment-patch.yaml
+@@ -27,3 +27,6 @@
+ - op: add
+   path: /spec/template/spec/serviceAccountName
+   value: payload-processing
++- op: replace
++  path: /spec/template/spec/volumes/1/secret/secretName
++  value: payload-pre-processing-tls
+diff --git a/overlays/odh/pre-processing/kustomization.yaml b/overlays/odh/pre-processing/kustomization.yaml
+index 0f42cd7..a25b51c 100644
+--- a/overlays/odh/pre-processing/kustomization.yaml
++++ b/overlays/odh/pre-processing/kustomization.yaml
+@@ -16,6 +16,9 @@ patches:
+       - op: replace
+         path: /metadata/name
+         value: payload-pre-processing
++      - op: replace
++        path: /metadata/annotations/service.beta.openshift.io~1serving-cert-secret-name
++        value: payload-pre-processing-tls
+       - op: replace
+         path: /spec/selector/app
+         value: payload-pre-processing
+diff --git a/overlays/odh/rbac/clusterrole.yaml b/tmp/praxis-pristine/overlays/odh/rbac/clusterrole.yaml
+deleted file mode 100644
+index 3b712b6..0000000
+--- a/overlays/odh/rbac/clusterrole.yaml
++++ /dev/null
+@@ -1,11 +0,0 @@
+-apiVersion: rbac.authorization.k8s.io/v1
+-kind: ClusterRole
+-metadata:
+-  name: payload-processing-reader
+-rules:
+-  - apiGroups: [""]
+-    resources: ["configmaps"]
+-    verbs: ["get", "list", "watch"]
+-  - apiGroups: ["inference.opendatahub.io"]
+-    resources: ["externalproviders", "externalmodels"]
+-    verbs: ["get", "list", "watch"]
+diff --git a/overlays/odh/rbac/clusterrolebinding.yaml b/tmp/praxis-pristine/overlays/odh/rbac/clusterrolebinding.yaml
+deleted file mode 100644
+index fd93bad..0000000
+--- a/overlays/odh/rbac/clusterrolebinding.yaml
++++ /dev/null
+@@ -1,12 +0,0 @@
+-apiVersion: rbac.authorization.k8s.io/v1
+-kind: ClusterRoleBinding
+-metadata:
+-  name: payload-processing-reader
+-subjects:
+-  - kind: ServiceAccount
+-    name: payload-processing
+-    namespace: openshift-ingress
+-roleRef:
+-  apiGroup: rbac.authorization.k8s.io
+-  kind: ClusterRole
+-  name: payload-processing-reader
+diff --git a/overlays/odh/rbac/kustomization.yaml b/overlays/odh/rbac/kustomization.yaml
+index 41d09d7..2d8113c 100644
+--- a/overlays/odh/rbac/kustomization.yaml
++++ b/overlays/odh/rbac/kustomization.yaml
+@@ -3,5 +3,3 @@ kind: Kustomization
+ 
+ resources:
+   - serviceaccount.yaml
+-  - clusterrole.yaml
+-  - clusterrolebinding.yaml
+diff --git a/overlays/odh/rbac/serviceaccount.yaml b/overlays/odh/rbac/serviceaccount.yaml
+index 61b300a..beccc31 100644
+--- a/overlays/odh/rbac/serviceaccount.yaml
++++ b/overlays/odh/rbac/serviceaccount.yaml
+@@ -2,3 +2,4 @@ apiVersion: v1
+ kind: ServiceAccount
+ metadata:
+   name: payload-processing
++automountServiceAccountToken: false

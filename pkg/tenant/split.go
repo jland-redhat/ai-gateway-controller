@@ -50,6 +50,9 @@ func SplitPostAuthResources(resources []unstructured.Unstructured, tenantID, gat
 				if err := setServiceSelector(external, map[string]string{"app": PayloadProcessingExternalModelName, LabelTenantInstance: PayloadProcessingExternalModelDeploymentName(tenantID)}); err != nil {
 					return nil, fmt.Errorf("external-model Service selector: %w", err)
 				}
+				if err := setServingCertSecretName(external, PayloadProcessingExternalModelTLSSecretName(tenantID)); err != nil {
+					return nil, fmt.Errorf("external-model serving-cert: %w", err)
+				}
 				out = append(out, *external)
 			case u.GetKind() == "DestinationRule" && u.GetName() == PayloadProcessingServiceName(tenantID):
 				out = append(out, *u)
@@ -70,10 +73,8 @@ func SplitPostAuthResources(resources []unstructured.Unstructured, tenantID, gat
 					return nil, err
 				}
 				out = append(out, *u)
-			case u.GetKind() == "ClusterRoleBinding" && u.GetName() == PayloadProcessingReaderClusterRoleBindingNameForTenant(tenantID):
-				// Keep only the pre-auth binding. The post-auth account has no
-				// Kubernetes API permissions and must not inherit MaaS's reader role.
-				out = append(out, *u)
+			case u.GetKind() == "ClusterRoleBinding":
+				// Drop leftover reader bindings; ExtProc must not hold API grants.
 			default:
 				out = append(out, *u)
 			}
@@ -99,6 +100,9 @@ func SplitPostAuthResources(resources []unstructured.Unstructured, tenantID, gat
 			external.SetName(PayloadProcessingExternalModelServiceName(tenantID))
 			if err := setServiceSelector(external, map[string]string{"app": PayloadProcessingExternalModelName, LabelTenantInstance: PayloadProcessingExternalModelDeploymentName(tenantID)}); err != nil {
 				return nil, fmt.Errorf("external-model Service selector: %w", err)
+			}
+			if err := setServingCertSecretName(external, PayloadProcessingExternalModelTLSSecretName(tenantID)); err != nil {
+				return nil, fmt.Errorf("external-model serving-cert: %w", err)
 			}
 			out = append(out, *external)
 		case u.GetKind() == "DestinationRule" && u.GetName() == PayloadProcessingServiceName(tenantID):
@@ -138,12 +142,8 @@ func SplitPostAuthResources(resources []unstructured.Unstructured, tenantID, gat
 				return nil, fmt.Errorf("external-model EnvoyFilter: %w", err)
 			}
 			out = append(out, *u)
-		case u.GetKind() == "ClusterRoleBinding" && u.GetName() == PayloadProcessingReaderClusterRoleBindingNameForTenant(tenantID):
-			out = append(out, *u)
-			// Do not bind the tenant-local ExternalModel ExtProc to the shared
-			// MaaS reader ClusterRole. MaaS installations may grant that role
-			// Secret access for the IPP workload. The ExternalModel workload has
-			// no Kubernetes API contract and must remain unable to read Secrets.
+		case u.GetKind() == "ClusterRoleBinding":
+			// Drop leftover reader bindings; ExtProc must not hold API grants.
 		default:
 			out = append(out, *u)
 		}
@@ -215,6 +215,9 @@ func configureExternalModelDeployment(u *unstructured.Unstructured, tenantID str
 	}
 	if err := setConfigMapVolumeName(u, "plugins-config-volume", PayloadProcessingExternalModelPluginsConfigMapForTenant(tenantID)); err != nil {
 		return fmt.Errorf("ExternalModel ConfigMap volume: %w", err)
+	}
+	if err := setTLSSecretVolumeName(u, "tls", PayloadProcessingExternalModelTLSSecretName(tenantID)); err != nil {
+		return fmt.Errorf("ExternalModel TLS secret volume: %w", err)
 	}
 	volumes, _, err := unstructured.NestedSlice(u.Object, "spec", "template", "spec", "volumes")
 	if err != nil {

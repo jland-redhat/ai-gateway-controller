@@ -44,6 +44,10 @@ func deploymentFixture(name, appLabel, serviceAccountName, configMapName string)
 							"name":      "plugins-config-volume",
 							"configMap": map[string]any{"name": configMapName},
 						},
+						map[string]any{
+							"name":   "tls",
+							"secret": map[string]any{"secretName": name + "-tls"},
+						},
 					},
 				},
 			},
@@ -248,7 +252,7 @@ func TestRenameNetworkPolicyReplacesPodSelector(t *testing.T) {
 	}
 }
 
-func TestRenameClusterRoleBinding(t *testing.T) {
+func TestRenameLeavesClusterRoleBindingUntouched(t *testing.T) {
 	in := []unstructured.Unstructured{{Object: map[string]any{
 		"apiVersion": "rbac.authorization.k8s.io/v1",
 		"kind":       "ClusterRoleBinding",
@@ -262,16 +266,16 @@ func TestRenameClusterRoleBinding(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Rename: %v", err)
 	}
-	if got := out[0].GetName(); got != "payload-processing-reader-redteam" {
-		t.Fatalf("name = %q, want %q", got, "payload-processing-reader-redteam")
+	if got := out[0].GetName(); got != PayloadProcessingReaderClusterRoleBindingName {
+		t.Fatalf("name = %q, want unchanged %q (bindings are dropped later, not renamed)", got, PayloadProcessingReaderClusterRoleBindingName)
 	}
 	subjects, _, _ := unstructured.NestedSlice(out[0].Object, "subjects")
 	subject0, ok := subjects[0].(map[string]any)
 	if !ok {
 		t.Fatalf("subjects[0] is %T, want map[string]any", subjects[0])
 	}
-	if subject0["name"] != "payload-processing-redteam" {
-		t.Fatalf("subjects[0].name = %v, want %q", subject0["name"], "payload-processing-redteam")
+	if subject0["name"] != PayloadProcessingName {
+		t.Fatalf("subjects[0].name = %v, want unchanged %q", subject0["name"], PayloadProcessingName)
 	}
 }
 

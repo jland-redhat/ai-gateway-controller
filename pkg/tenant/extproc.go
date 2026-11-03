@@ -183,7 +183,9 @@ func sharedExtProcConfig(apiTranslation bool) string {
 	b.WriteString("  health_address: \"0.0.0.0:50052\"\n")
 	b.WriteString("  metrics_address: \"0.0.0.0:9090\"\n")
 	b.WriteString("  tls:\n")
-	b.WriteString("    mode: self_signed\n\n")
+	b.WriteString("    mode: provided\n")
+	b.WriteString("    cert_path: /etc/tls/private/tls.crt\n")
+	b.WriteString("    key_path: /etc/tls/private/tls.key\n\n")
 	b.WriteString("filter_chains:\n")
 	b.WriteString("  - name: ipp\n")
 	b.WriteString("    filters:\n")
@@ -470,7 +472,7 @@ func extprocPostAuthConfig(candidates []envelope.Candidate, credentials []extpro
 	if apiTranslationEnabled {
 		fmt.Fprintf(&b, "  max_body_bytes: %d\n", extprocMaxBodyBytes)
 	}
-	b.WriteString("  tls:\n    mode: self_signed\n\n")
+	b.WriteString("  tls:\n    mode: provided\n    cert_path: /etc/tls/private/tls.crt\n    key_path: /etc/tls/private/tls.key\n\n")
 	// headers must stay first: it strips caller credentials and internal MaaS
 	// identity headers before intelligent_route / credential_inject run, so
 	// credential_inject's injected provider credential is never clobbered by

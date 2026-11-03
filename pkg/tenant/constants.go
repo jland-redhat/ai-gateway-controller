@@ -171,8 +171,9 @@ const (
 	PayloadProcessingExternalModelName            = "payload-processing-external-model"
 	PayloadPreProcessingName                      = "payload-pre-processing"
 	PayloadProcessingPluginsConfigMapName         = "payload-processing-plugins"
-	PayloadProcessingReaderClusterRoleBindingName = "payload-processing-reader"
+	PayloadProcessingReaderClusterRoleBindingName = "payload-processing-reader" // retained for leftover binding cleanup
 	PayloadProcessingExternalModelFilterName      = "payload-processing-external-model-filters"
+	servingCertSecretAnnotation                   = "service.beta.openshift.io/serving-cert-secret-name" //nolint:gosec // G101: annotation key name, not a credential
 
 	// Legacy standalone names are retained only so cleanup can remove resources
 	// created before the ExtProc dataplane migration.

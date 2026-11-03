@@ -138,7 +138,9 @@ func TestExternalModelConfigMatchesMainWhenTranslationIsOff(t *testing.T) {
   health_address: "0.0.0.0:50052"
   metrics_address: "0.0.0.0:9090"
   tls:
-    mode: self_signed
+    mode: provided
+    cert_path: /etc/tls/private/tls.crt
+    key_path: /etc/tls/private/tls.key
 
 filter_chains:
   - name: post-auth

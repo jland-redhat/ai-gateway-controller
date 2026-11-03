@@ -91,7 +91,53 @@ normalize_extproc_cluster_role() {
     RBAC_TMP_FILE=
 }
 
+# Apply intentional downstream security hardenings that are not yet upstream in
+# the pinned praxis-extproc commit (SA token off, drop reader ClusterRole,
+# service-serving TLS trust, circuit breakers, no API egress). Refresh the
+# patch when bumping PRAXIS_EXTPROC_COMMIT:
+#   1. Run fetch + normalize_extproc_cluster_role only
+#   2. Re-apply/reconcile the desired tree
+#   3. git diff --no-index pristine hardened > praxis-extproc-patches/0001-...
+apply_extproc_security_hardening() {
+    local dst=$1
+    local patch="${SCRIPT_DIR}/praxis-extproc-patches/0001-security-hardening.patch"
+
+    [[ -f "${patch}" ]] || {
+        echo "missing ExtProc security patch: ${patch}" >&2
+        return 1
+    }
+    command -v git >/dev/null 2>&1 || {
+        echo "git is required to apply ${patch}" >&2
+        return 1
+    }
+
+    # Apply relative to ${dst}. --git-dir=/dev/null is required because the
+    # vendored tree lives inside this repo's worktree; without it, git apply
+    # walks up to the parent repo and skips every hunk.
+    # Fail closed if the pin drifted out from under the patch — bumping
+    # PRAXIS_EXTPROC_COMMIT requires regenerating it.
+    if ! git -C "${dst}" --git-dir=/dev/null apply --check "${patch}"; then
+        echo "refusing to vendor: ${patch} no longer applies to pin ${PRAXIS_EXTPROC_COMMIT}" >&2
+        echo "Reconcile hack/scripts/praxis-extproc-patches/ against the new pin and retry." >&2
+        return 1
+    fi
+    git -C "${dst}" --git-dir=/dev/null apply "${patch}"
+
+    # Cheap postcondition: the reader ClusterRole must be gone and the SA must
+    # refuse automount. Catches a silent "Skipped patch" apply against a parent
+    # git worktree.
+    [[ ! -f "${dst}/overlays/odh/rbac/clusterrole.yaml" ]] || {
+        echo "refusing to vendor: security patch left overlays/odh/rbac/clusterrole.yaml in place" >&2
+        return 1
+    }
+    grep -q 'automountServiceAccountToken: false' "${dst}/overlays/odh/rbac/serviceaccount.yaml" || {
+        echo "refusing to vendor: security patch did not set automountServiceAccountToken: false" >&2
+        return 1
+    }
+}
+
 if [[ "${GET_MANIFESTS_TEST_ONLY:-false}" != true ]]; then
     fetch_praxis_extproc
     normalize_extproc_cluster_role "${DST_ROOT}/overlays/odh/rbac/clusterrole.yaml"
+    apply_extproc_security_hardening "${DST_ROOT}"
 fi

@@ -81,6 +81,24 @@ func PayloadProcessingExternalModelServiceName(tenantID string) string {
 	return ResourceName(PayloadProcessingExternalModelName, tenantID)
 }
 
+// PayloadProcessingTLSSecretName is the OpenShift service-ca secret annotated
+// onto the shared post-auth ExtProc Service.
+func PayloadProcessingTLSSecretName(tenantID string) string {
+	return PayloadProcessingServiceName(tenantID) + "-tls"
+}
+
+// PayloadPreProcessingTLSSecretName is the OpenShift service-ca secret for the
+// pre-auth ExtProc Service.
+func PayloadPreProcessingTLSSecretName(tenantID string) string {
+	return PayloadPreProcessingServiceName(tenantID) + "-tls"
+}
+
+// PayloadProcessingExternalModelTLSSecretName is the OpenShift service-ca
+// secret for the ExternalModel ExtProc Service.
+func PayloadProcessingExternalModelTLSSecretName(tenantID string) string {
+	return PayloadProcessingExternalModelServiceName(tenantID) + "-tls"
+}
+
 func PayloadProcessingExternalModelPluginsConfigMapForTenant(tenantID string) string {
 	return ResourceName(PayloadProcessingExternalModelName+"-plugins", tenantID)
 }

@@ -418,11 +418,18 @@ spec:
           type: STRICT_DNS
           connect_timeout: 10s
           lb_policy: ROUND_ROBIN
+          circuit_breakers:
+            thresholds:
+              - max_connections: 32
+                max_pending_requests: 32
+                max_requests: 32
+                max_retries: 3
           typed_extension_protocol_options:
             envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
               "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
               explicit_http_config:
-                http2_protocol_options: {}
+                http2_protocol_options:
+                  max_concurrent_streams: 32
           transport_socket:
             name: envoy.transport_sockets.tls
             typed_config:
@@ -431,7 +438,12 @@ spec:
               common_tls_context:
                 alpn_protocols: ["h2"]
                 validation_context:
-                  trust_chain_verification: ACCEPT_UNTRUSTED
+                  trusted_ca:
+                    filename: /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt
+                  match_typed_subject_alt_names:
+                    - san_type: DNS
+                      matcher:
+                        exact: payload-pre-processing.openshift-ingress.svc.cluster.local
           load_assignment:
             cluster_name: payload-pre-processing-extproc
             endpoints:
@@ -451,11 +463,18 @@ spec:
           type: STRICT_DNS
           connect_timeout: 10s
           lb_policy: ROUND_ROBIN
+          circuit_breakers:
+            thresholds:
+              - max_connections: 32
+                max_pending_requests: 32
+                max_requests: 32
+                max_retries: 3
           typed_extension_protocol_options:
             envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
               "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
               explicit_http_config:
-                http2_protocol_options: {}
+                http2_protocol_options:
+                  max_concurrent_streams: 32
           transport_socket:
             name: envoy.transport_sockets.tls
             typed_config:
@@ -464,7 +483,12 @@ spec:
               common_tls_context:
                 alpn_protocols: ["h2"]
                 validation_context:
-                  trust_chain_verification: ACCEPT_UNTRUSTED
+                  trusted_ca:
+                    filename: /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt
+                  match_typed_subject_alt_names:
+                    - san_type: DNS
+                      matcher:
+                        exact: payload-processing.openshift-ingress.svc.cluster.local
           load_assignment:
             cluster_name: payload-processing-extproc
             endpoints:
