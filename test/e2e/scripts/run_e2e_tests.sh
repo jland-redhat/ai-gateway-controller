@@ -2,9 +2,9 @@
 # ai-gateway-controller e2e runner — MaaS pytest suite (dynamic checkout).
 # Excluded modules: see test/e2e/TODO.md
 #
-# When E2E_SMOKE_ONLY=true (prow/group-test default), passes require @pytest.mark.smoke
-# so CI runs the low-churn subset from the pinned MaaS checkout. Set E2E_SMOKE_ONLY=false
-# (or omit --smoke-only) for the full allowlist.
+# When E2E_SMOKE_ONLY=true (group-test Tekton sets this), passes require @pytest.mark.smoke
+# so CI runs the low-churn subset from the pinned MaaS checkout. Default is false (full
+# allowlist); use --smoke-only for a one-off local smoke run.
 
 set -euo pipefail
 
