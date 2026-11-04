@@ -1,6 +1,10 @@
 #!/bin/bash
 # ai-gateway-controller e2e runner — MaaS pytest suite (dynamic checkout).
 # Excluded modules: see test/e2e/TODO.md
+#
+# When E2E_SMOKE_ONLY=true (prow/group-test default), passes require @pytest.mark.smoke
+# so CI runs the low-churn subset from the pinned MaaS checkout. Set E2E_SMOKE_ONLY=false
+# (or omit --smoke-only) for the full allowlist.
 
 set -euo pipefail
 
@@ -13,14 +17,27 @@ fi
 TEST_DIR="${MAAS_E2E_DIR}"
 
 serial_only=false
+smoke_only=false
+case "${E2E_SMOKE_ONLY:-false}" in
+    1 | true | TRUE | yes | YES) smoke_only=true ;;
+esac
 extra_pytest_args=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --serial-only) serial_only=true; shift ;;
+        --smoke-only) smoke_only=true; shift ;;
         --) shift; extra_pytest_args=("$@"); break ;;
         *) extra_pytest_args+=("$1"); shift ;;
     esac
 done
+
+_smoke_require=""
+if [[ "$smoke_only" == "true" ]]; then
+    _smoke_require="smoke and "
+    echo "E2E smoke-only mode: restricting passes to @pytest.mark.smoke (within the AIGC allowlist)"
+fi
+_parallel_marker="${_smoke_require}not serial"
+_serial_marker="${_smoke_require}serial"
 
 export E2E_RECONCILE_WAIT="${E2E_RECONCILE_WAIT:-4}"
 E2E_PARALLEL_WORKERS="${E2E_PARALLEL_WORKERS:-7}"
@@ -122,30 +139,37 @@ parallel_rc=0
 serial_rc=0
 
 if [[ "$serial_only" == "true" || "$E2E_PARALLEL_WORKERS" -le 1 ]]; then
-    echo "Running E2E tests serially (E2E_PARALLEL_WORKERS=${E2E_PARALLEL_WORKERS})"
+    _single_worker_args=()
+    if [[ "$smoke_only" == "true" ]]; then
+        _single_worker_args=(-m smoke)
+        echo "Running E2E tests serially (E2E_PARALLEL_WORKERS=${E2E_PARALLEL_WORKERS}, -m smoke)"
+    else
+        echo "Running E2E tests serially (E2E_PARALLEL_WORKERS=${E2E_PARALLEL_WORKERS})"
+    fi
     if ! PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
         --maxfail=5 \
+        "${_single_worker_args[@]}" \
         --junitxml="$xml" \
         --html="$html" --self-contained-html \
         "${pytest_common_args[@]}"; then
         parallel_rc=1
     fi
 else
-    echo "Running E2E pass 1/2: parallel (E2E_PARALLEL_WORKERS=${E2E_PARALLEL_WORKERS}, --dist=loadgroup, -m 'not serial')"
+    echo "Running E2E pass 1/2: parallel (E2E_PARALLEL_WORKERS=${E2E_PARALLEL_WORKERS}, --dist=loadgroup, -m '${_parallel_marker}')"
     if ! PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
         --maxfail=5 \
         -n "$E2E_PARALLEL_WORKERS" --dist=loadgroup \
-        -m "not serial" \
+        -m "${_parallel_marker}" \
         --junitxml="$xml" \
         --html="$html" --self-contained-html \
         "${pytest_common_args[@]}"; then
         parallel_rc=1
     fi
 
-    echo "Running E2E pass 2/2: serial cluster mutators (-m serial, single worker)"
+    echo "Running E2E pass 2/2: serial cluster mutators (-m '${_serial_marker}', single worker)"
     if ! PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
         --maxfail=5 \
-        -m serial \
+        -m "${_serial_marker}" \
         --junitxml="$xml_serial" \
         --html="${html%.html}-serial.html" --self-contained-html \
         "${pytest_common_args[@]}"; then
