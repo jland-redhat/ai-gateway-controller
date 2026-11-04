@@ -138,6 +138,26 @@ fi
 parallel_rc=0
 serial_rc=0
 
+# pytest exit 5 = no tests collected/selected (e.g. smoke-only serial pass when
+# the allowlist has no @pytest.mark.smoke + serial tests). Match MaaS runner.
+run_pytest_pass() {
+    local pass_label="$1"
+    shift
+    local rc=0
+    set +e
+    PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest "$@"
+    rc=$?
+    set -e
+    if [[ "$rc" -eq 0 ]]; then
+        return 0
+    fi
+    if [[ "$rc" -eq 5 ]]; then
+        echo "Note: ${pass_label} collected no tests (pytest exit 5), treating as success"
+        return 0
+    fi
+    return 1
+}
+
 if [[ "$serial_only" == "true" || "$E2E_PARALLEL_WORKERS" -le 1 ]]; then
     _single_worker_args=()
     if [[ "$smoke_only" == "true" ]]; then
@@ -146,7 +166,7 @@ if [[ "$serial_only" == "true" || "$E2E_PARALLEL_WORKERS" -le 1 ]]; then
     else
         echo "Running E2E tests serially (E2E_PARALLEL_WORKERS=${E2E_PARALLEL_WORKERS})"
     fi
-    if ! PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
+    if ! run_pytest_pass "serial-only" \
         --maxfail=5 \
         "${_single_worker_args[@]}" \
         --junitxml="$xml" \
@@ -156,7 +176,7 @@ if [[ "$serial_only" == "true" || "$E2E_PARALLEL_WORKERS" -le 1 ]]; then
     fi
 else
     echo "Running E2E pass 1/2: parallel (E2E_PARALLEL_WORKERS=${E2E_PARALLEL_WORKERS}, --dist=loadgroup, -m '${_parallel_marker}')"
-    if ! PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
+    if ! run_pytest_pass "parallel" \
         --maxfail=5 \
         -n "$E2E_PARALLEL_WORKERS" --dist=loadgroup \
         -m "${_parallel_marker}" \
@@ -167,7 +187,7 @@ else
     fi
 
     echo "Running E2E pass 2/2: serial cluster mutators (-m '${_serial_marker}', single worker)"
-    if ! PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
+    if ! run_pytest_pass "serial" \
         --maxfail=5 \
         -m "${_serial_marker}" \
         --junitxml="$xml_serial" \
