@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -33,6 +34,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -112,6 +114,13 @@ type Reconciler struct {
 	// Log receives one entry per reconcile, plus any render/apply/cleanup
 	// error.
 	Log logr.Logger
+	// Recorder publishes a Warning Event on an AIGuardrail this tenant fails
+	// closed although the guardrail reconciler accepted it. Nil disables them.
+	Recorder events.EventRecorder
+
+	// nemoOutsideInfra holds, per tenant namespace, what reportNemoOutsideInfra
+	// last reported, so it reports only changes.
+	nemoOutsideInfra sync.Map
 }
 
 const reasonModelCredentialNotReady = "ModelCredentialNotReady" //nolint:gosec // status reason, not a credential value
@@ -646,12 +655,14 @@ func (r *Reconciler) reconcilePraxis(ctx context.Context, log logr.Logger, mtc *
 	if err != nil {
 		log.Error(err, "guardrail catalog is incomplete; affected checks fail closed and the rest are published")
 	}
+	r.reportNemoOutsideInfra(ctx, log, tenantNamespace, infraNamespace, pinNemoCalloutsToInfra(callouts, infraNamespace))
 	reader := r.APIReader
 	if reader == nil {
 		reader = r.Client
 	}
 	bindNemoPodSelectors(ctx, reader, callouts)
-	if err := configureNemoCallouts(resources, tenantID, gatewayNamespace, callouts); err != nil {
+	resources, err = configureNemoCallouts(resources, tenantID, gatewayNamespace, tenantNamespace, callouts)
+	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("compile NeMo callouts: %w", err)
 	}
 	if err := r.waitForForeignOwnership(ctx, resources); err != nil {
@@ -686,6 +697,9 @@ func (r *Reconciler) reconcilePraxis(ctx context.Context, log logr.Logger, mtc *
 		return ctrl.Result{}, fmt.Errorf("apply: %w", err)
 	}
 	if err := r.cleanupOrphanedIPPHPAs(ctx, tenantID, gatewayNamespace, scaling); err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.pruneNemoCallerRBAC(ctx, tenantNamespace, resources); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -1319,6 +1333,7 @@ func (r *Reconciler) cleanup(ctx context.Context, tenantID, gatewayNamespace, te
 		{gvkConfigMap, PayloadProcessingExternalModelPluginsConfigMapForTenant(tenantID), tenantNamespace},
 		{gvkServiceAccount, PayloadProcessingServiceAccountName(tenantID), gatewayNamespace},
 		{gvkServiceAccount, PayloadProcessingServiceAccountName(tenantID), tenantNamespace},
+		{gvkServiceAccount, PayloadProcessingPostServiceAccountName(tenantID), gatewayNamespace},
 		{gvkServiceAccount, PayloadProcessingPostServiceAccountName(tenantID), tenantNamespace},
 		{gvkServiceAccount, PayloadProcessingExternalModelServiceAccountName(tenantID), tenantNamespace},
 		{gvkNetworkPolicy, PayloadProcessingNetworkPolicyName(tenantID), gatewayNamespace},
@@ -1342,6 +1357,10 @@ func (r *Reconciler) cleanup(ctx context.Context, tenantID, gatewayNamespace, te
 			return err
 		}
 	}
+	if err := r.pruneNemoCallerRBAC(ctx, tenantNamespace, nil); err != nil {
+		return err
+	}
+	r.nemoOutsideInfra.Delete(tenantNamespace)
 	return r.cleanupAttachmentState(ctx, tenantNamespace)
 }
 
