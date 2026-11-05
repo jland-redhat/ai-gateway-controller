@@ -286,12 +286,14 @@ spec:
           type: STRICT_DNS
           connect_timeout: 10s
           lb_policy: ROUND_ROBIN
+          # Default ExtProc concurrency budget. ai-gateway-controller may override
+          # via MaasTenantConfig annotation maas.opendatahub.io/experimental-extproc-max-requests.
+          # max_retries is intentionally omitted: without a retry_policy it is a no-op.
           circuit_breakers:
             thresholds:
               - max_connections: 32
                 max_pending_requests: 32
                 max_requests: 32
-                max_retries: 3
           typed_extension_protocol_options:
             envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
               "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions

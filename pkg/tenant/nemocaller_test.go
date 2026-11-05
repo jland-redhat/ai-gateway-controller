@@ -96,8 +96,18 @@ func TestConfigureNemoCalloutsCompilesAcceptedEndpoint(t *testing.T) {
 	if len(resources) != 4 {
 		t.Fatalf("resources = %d, want no NeMo RBAC for auth-off providers", len(resources))
 	}
-	if volumes, _, _ := unstructured.NestedSlice(resources[0].Object, "spec", "template", "spec", "volumes"); len(volumes) != 1 {
-		t.Fatalf("volumes = %v, want no NeMo auth volume for auth-off providers", volumes)
+	volumes, _, _ := unstructured.NestedSlice(resources[0].Object, "spec", "template", "spec", "volumes")
+	if len(volumes) != 2 {
+		t.Fatalf("volumes = %v, want plugins + TLS only (no NeMo auth volume for auth-off providers)", volumes)
+	}
+	for _, volume := range volumes {
+		v, ok := volume.(map[string]any)
+		if !ok {
+			t.Fatalf("volume = %T, want object", volume)
+		}
+		if name, _, _ := unstructured.NestedString(v, "name"); name == nemoAuthVolumeName {
+			t.Fatalf("volumes = %v, want no NeMo auth volume for auth-off providers", volumes)
+		}
 	}
 	data, _, _ := unstructured.NestedStringMap(findResource(resources, "ConfigMap", PayloadProcessingPluginsConfigMapForTenant("red"), "gw").Object, "data")
 	config := data["extproc.yaml"]

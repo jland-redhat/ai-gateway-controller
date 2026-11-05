@@ -613,6 +613,10 @@ func (r *Reconciler) reconcilePraxis(ctx context.Context, log logr.Logger, mtc *
 	} else {
 		resources = RemoveExternalModelResources(resources, tenantID)
 	}
+	extProcMaxRequests := resolveExtProcMaxRequests(mtc, log)
+	if err := configureExtProcConcurrency(resources, extProcMaxRequests); err != nil {
+		return ctrl.Result{}, fmt.Errorf("configure ExtProc concurrency: %w", err)
+	}
 	if r.SkipNetworkPolicy {
 		filtered := make([]unstructured.Unstructured, 0, len(resources))
 		for _, resource := range resources {

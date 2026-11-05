@@ -52,6 +52,10 @@ const extprocConfigHashAnnotation = "ai-gateway-controller.opendatahub.io/extpro
 // selected-provider translator retains, and the stream_usage_inject buffer.
 // The translator limit is also the selected-upstream request body limit, so a
 // smaller value rejects long-context requests to every provider with 413.
+//
+// MaaS/ODH keeps this at 10 MiB even when upstream praxis-extproc base defaults
+// rise (e.g. 32 MiB after the gRPC ceiling raise): the controller-rendered and
+// vendored ConfigMaps are the deploy source of truth for AGC-managed tenants.
 const extprocMaxBodyBytes = 10485760
 
 // configureSharedExtProc renders the shared post-auth chain from the

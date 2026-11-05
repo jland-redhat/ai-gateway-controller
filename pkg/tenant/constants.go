@@ -114,6 +114,26 @@ const (
 	AnnotationAITenantName      = "maas.opendatahub.io/aitenant-name"
 	AnnotationAITenantNamespace = "maas.opendatahub.io/aitenant-namespace"
 
+	// AnnotationExtProcMaxRequests overrides the ExtProc upstream Envoy
+	// circuit-breaker concurrency budget (max_connections, max_pending_requests,
+	// max_requests) and HTTP/2 max_concurrent_streams for this tenant's ExtProc
+	// clusters. Default (absent/invalid) is DefaultExtProcMaxRequests.
+	//
+	// Annotation rather than MaasTenantConfig.spec: Praxis v3 may reshape how
+	// ExtProc concurrency is expressed, and we do not want a typed CRD field
+	// that would need deprecation during that move. Mirrors the experimental-*
+	// annotation pattern used for Envoy body-buffer limits in maas-controller.
+	AnnotationExtProcMaxRequests = "maas.opendatahub.io/experimental-extproc-max-requests"
+
+	// DefaultExtProcMaxRequests is the ExtProc upstream concurrency budget when
+	// AnnotationExtProcMaxRequests is absent. It is a hard Envoy circuit-breaker
+	// cap (not a soft hint) chosen to bound ExtProc memory under large bodies.
+	DefaultExtProcMaxRequests int64 = 32
+
+	// MaxExtProcMaxRequests bounds AnnotationExtProcMaxRequests (Envoy's own
+	// circuit-breaker default is 1024).
+	MaxExtProcMaxRequests int64 = 1024
+
 	// LabelManagedByAITenant and LabelTenantName mirror maas-controller's
 	// tenantreconcile.LabelManagedByAITenant / LabelTenantName, set by
 	// AITenantReconciler.applyAITenantMetadata. Used to derive the per-tenant
