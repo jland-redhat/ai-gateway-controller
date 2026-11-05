@@ -644,26 +644,12 @@ func (r *Reconciler) reconcilePraxis(ctx context.Context, log logr.Logger, mtc *
 		labels[managedByLabel] = render.FieldOwner
 		resources[i].SetLabels(labels)
 	}
-	callouts, err := acceptedNemoCallouts(ctx, r.Client, tenantNamespace)
-	if errors.Is(err, errStaleBinding) {
-		log.Info("guardrail status is behind its spec; keeping the checks already published", "error", err)
-		return ctrl.Result{RequeueAfter: constants.NotReadyRequeueInterval}, nil
-	}
-	if err != nil && !softCalloutErr(err) {
+	resources, retry, err := r.configurePraxisNemoCallouts(ctx, log, resources, tenantID, tenantNamespace, gatewayNamespace, infraNamespace)
+	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if err != nil {
-		log.Error(err, "guardrail catalog is incomplete; affected checks fail closed and the rest are published")
-	}
-	r.reportNemoOutsideInfra(ctx, log, tenantNamespace, infraNamespace, pinNemoCalloutsToInfra(callouts, infraNamespace))
-	reader := r.APIReader
-	if reader == nil {
-		reader = r.Client
-	}
-	bindNemoPodSelectors(ctx, reader, callouts)
-	resources, err = configureNemoCallouts(resources, tenantID, gatewayNamespace, tenantNamespace, callouts)
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("compile NeMo callouts: %w", err)
+	if retry {
+		return ctrl.Result{RequeueAfter: constants.NotReadyRequeueInterval}, nil
 	}
 	if err := r.waitForForeignOwnership(ctx, resources); err != nil {
 		log.Info("praxis-extproc resources are still owned by another controller; waiting for handoff", "error", err)
@@ -721,6 +707,36 @@ func (r *Reconciler) reconcilePraxis(ctx context.Context, log logr.Logger, mtc *
 		return ctrl.Result{RequeueAfter: constants.NotReadyRequeueInterval}, nil
 	}
 	return ctrl.Result{RequeueAfter: r.ResyncInterval}, nil
+}
+
+func (r *Reconciler) configurePraxisNemoCallouts(
+	ctx context.Context,
+	log logr.Logger,
+	resources []unstructured.Unstructured,
+	tenantID, tenantNamespace, gatewayNamespace, infraNamespace string,
+) ([]unstructured.Unstructured, bool, error) {
+	callouts, err := acceptedNemoCallouts(ctx, r.Client, tenantNamespace)
+	if errors.Is(err, errStaleBinding) {
+		log.Info("guardrail status is behind its spec; keeping the checks already published", "error", err)
+		return nil, true, nil
+	}
+	if err != nil && !softCalloutErr(err) {
+		return nil, false, err
+	}
+	if err != nil {
+		log.Error(err, "guardrail catalog is incomplete; affected checks fail closed and the rest are published")
+	}
+	r.reportNemoOutsideInfra(ctx, log, tenantNamespace, infraNamespace, pinNemoCalloutsToInfra(callouts, infraNamespace))
+	reader := r.APIReader
+	if reader == nil {
+		reader = r.Client
+	}
+	bindNemoPodSelectors(ctx, reader, callouts)
+	resources, err = configureNemoCallouts(resources, tenantID, gatewayNamespace, tenantNamespace, callouts)
+	if err != nil {
+		return nil, false, fmt.Errorf("compile NeMo callouts: %w", err)
+	}
+	return resources, false, nil
 }
 
 func (r *Reconciler) resolvePraxisRuntimeCandidates(
