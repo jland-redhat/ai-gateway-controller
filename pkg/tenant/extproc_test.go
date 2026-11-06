@@ -43,7 +43,7 @@ func TestConfigureExternalModelExtProcProjectsReferencesAndTrustedHandoff(t *tes
 			},
 		},
 	}
-	if err := configureExternalModelExtProc(resources, "redteam", "tenant-a", candidates, true); err != nil {
+	if err := configureExternalModelExtProc(resources, "redteam", "tenant-a", candidates, true, DefaultExtProcMaxBodyBytes); err != nil {
 		t.Fatal(err)
 	}
 	data, found, err := unstructured.NestedStringMap(resources[0].Object, "data")
@@ -124,7 +124,7 @@ func TestExternalModelConfigMatchesMainWhenTranslationIsOff(t *testing.T) {
 	}
 	if err := configureExternalModelExtProc(resources, "", "tenant-a", []envelope.Candidate{{
 		Cluster: "provider-openai", Name: "demo", StableID: envelope.CandidateStableID("demo-model", "openai"),
-	}}, false); err != nil {
+	}}, false, DefaultExtProcMaxBodyBytes); err != nil {
 		t.Fatal(err)
 	}
 	data, _, err := unstructured.NestedStringMap(resources[0].Object, "data")
@@ -220,7 +220,7 @@ func TestExtprocCredentialsRenderPerEntryHeader(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	config := extprocPostAuthConfig(candidates, credentials, false)
+	config := extprocPostAuthConfig(candidates, credentials, false, DefaultExtProcMaxBodyBytes)
 	if !strings.Contains(config, "strategy: apikey\n            header: api-key\n") {
 		t.Fatalf("azure entry must render api-key header between strategy and file:\n%s", config)
 	}
@@ -286,7 +286,7 @@ func TestExtprocPostAuthConfigNeverEmitsHeaderForBearerToken(t *testing.T) {
 		strategy: "bearer_token", header: "api-key", // header must be dropped
 		file: "/etc/praxis/credentials/openai-secret-abc/api-key",
 	}}
-	config := extprocPostAuthConfig(nil, credentials, false)
+	config := extprocPostAuthConfig(nil, credentials, false, DefaultExtProcMaxBodyBytes)
 	if strings.Contains(config, "strategy: bearer_token\n            header:") {
 		t.Fatalf("bearer_token entry must never render a header line:\n%s", config)
 	}
@@ -319,7 +319,7 @@ func TestExtprocCredentialsRejectsUnsupportedAuth(t *testing.T) {
 }
 
 func TestSharedExtProcConfigDefaultOff(t *testing.T) {
-	config := sharedExtProcConfig(false)
+	config := sharedExtProcConfig(false, DefaultExtProcMaxBodyBytes)
 	if strings.Contains(config, "anthropic_messages_to_chat_completions") || strings.Contains(config, "path_rewrite") {
 		t.Fatalf("default-off shared chain unexpectedly contains translation:\n%s", config)
 	}
@@ -338,13 +338,13 @@ func TestSharedExtProcConfigDefaultOff(t *testing.T) {
 func TestSharedExtProcConfigHasHeadersGuard(t *testing.T) {
 	for _, apiTranslation := range []bool{false, true} {
 		t.Run(fmt.Sprintf("apiTranslation=%t", apiTranslation), func(t *testing.T) {
-			assertSharedConfigHasLeadingHeadersGuard(t, sharedExtProcConfig(apiTranslation))
+			assertSharedConfigHasLeadingHeadersGuard(t, sharedExtProcConfig(apiTranslation, DefaultExtProcMaxBodyBytes))
 		})
 	}
 }
 
 func TestSharedExtProcConfigUsesRegisteredOrderedMessagesFilters(t *testing.T) {
-	config := sharedExtProcConfig(true)
+	config := sharedExtProcConfig(true, DefaultExtProcMaxBodyBytes)
 	ordered := []string{
 		"filter: headers",
 		"filter: request_id",
@@ -472,7 +472,7 @@ func TestConfigureSharedExtProcDoesNotRewriteExternalModelResources(t *testing.T
 			"data":     map[string]any{"extproc.yaml": "external-model-chain"},
 		}},
 	}
-	if err := configureSharedExtProc(resources, tenantID, gatewayNamespace, true); err != nil {
+	if err := configureSharedExtProc(resources, tenantID, gatewayNamespace, true, DefaultExtProcMaxBodyBytes); err != nil {
 		t.Fatal(err)
 	}
 	data, _, err := unstructured.NestedStringMap(resources[0].Object, "data")
@@ -516,7 +516,7 @@ func TestConfigureSharedExtProcKeepsDefaultResponseModeWhenTranslationIsOff(t *t
 		}},
 		sharedEnvoyFilterFixture(tenantID, gatewayNamespace),
 	}
-	if err := configureSharedExtProc(resources, tenantID, gatewayNamespace, false); err != nil {
+	if err := configureSharedExtProc(resources, tenantID, gatewayNamespace, false, DefaultExtProcMaxBodyBytes); err != nil {
 		t.Fatal(err)
 	}
 	assertSharedResponseMode(t, resources[2], "BUFFERED", false)
@@ -557,10 +557,10 @@ func TestTranslationSettingsToggleWithoutStaleRenderedState(t *testing.T) {
 	}
 	candidates := []envelope.Candidate{{Cluster: "provider-openai"}}
 	for _, enabled := range []bool{false, true, false} {
-		if err := configureSharedExtProc(resources, tenantID, gatewayNamespace, enabled); err != nil {
+		if err := configureSharedExtProc(resources, tenantID, gatewayNamespace, enabled, DefaultExtProcMaxBodyBytes); err != nil {
 			t.Fatalf("configure shared ExtProc with translation=%t: %v", enabled, err)
 		}
-		if err := configureExternalModelExtProc(resources, tenantID, "tenant-a", candidates, enabled); err != nil {
+		if err := configureExternalModelExtProc(resources, tenantID, "tenant-a", candidates, enabled, DefaultExtProcMaxBodyBytes); err != nil {
 			t.Fatalf("configure ExternalModel ExtProc with translation=%t: %v", enabled, err)
 		}
 		assertSharedResponseMode(t, resources[2], map[bool]string{true: "STREAMED", false: "BUFFERED"}[enabled], enabled)

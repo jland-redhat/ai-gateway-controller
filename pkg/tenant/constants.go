@@ -127,12 +127,28 @@ const (
 
 	// DefaultExtProcMaxRequests is the ExtProc upstream concurrency budget when
 	// AnnotationExtProcMaxRequests is absent. It is a hard Envoy circuit-breaker
-	// cap (not a soft hint) chosen to bound ExtProc memory under large bodies.
-	DefaultExtProcMaxRequests int64 = 32
+	// cap (not a soft hint) chosen to bound ExtProc memory under large bodies
+	// (paired with DefaultExtProcMaxBodyBytes: 8×10 MiB ≈ 80 MiB under a
+	// 256 MiB ExtProc limit).
+	DefaultExtProcMaxRequests int64 = 8
 
 	// MaxExtProcMaxRequests bounds AnnotationExtProcMaxRequests (Envoy's own
 	// circuit-breaker default is 1024).
 	MaxExtProcMaxRequests int64 = 1024
+
+	// AnnotationExtProcMaxBodyBytes overrides Praxis ExtProc server
+	// max_body_bytes (ConfigMap pre-extproc.yaml / rendered extproc.yaml) for
+	// this tenant. Default (absent/invalid) is DefaultExtProcMaxBodyBytes.
+	// Same experimental-annotation rationale as AnnotationExtProcMaxRequests.
+	AnnotationExtProcMaxBodyBytes = "maas.opendatahub.io/experimental-extproc-max-body-bytes"
+
+	// DefaultExtProcMaxBodyBytes is the ExtProc server body bound when
+	// AnnotationExtProcMaxBodyBytes is absent (10 MiB).
+	DefaultExtProcMaxBodyBytes int64 = 10485760
+
+	// MaxExtProcMaxBodyBytes is the gRPC per-message ceiling (32 MiB) and the
+	// upper bound for AnnotationExtProcMaxBodyBytes.
+	MaxExtProcMaxBodyBytes int64 = 33554432
 
 	// LabelManagedByAITenant and LabelTenantName mirror maas-controller's
 	// tenantreconcile.LabelManagedByAITenant / LabelTenantName, set by

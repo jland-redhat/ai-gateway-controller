@@ -313,14 +313,18 @@ func TestRenameLeavesClusterRoleUnchanged(t *testing.T) {
 }
 
 func destinationRuleFixture(name string) unstructured.Unstructured {
+	fqdn := name + ".istio-system.svc.cluster.local"
 	return unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "networking.istio.io/v1",
 		"kind":       "DestinationRule",
 		"metadata":   map[string]any{"name": name},
 		"spec": map[string]any{
-			"host": name + ".istio-system.svc.cluster.local",
+			"host": fqdn,
 			"trafficPolicy": map[string]any{
-				"tls": map[string]any{"sni": name + ".istio-system.svc.cluster.local"},
+				"tls": map[string]any{
+					"sni":             fqdn,
+					"subjectAltNames": []any{fqdn},
+				},
 			},
 		},
 	}}
@@ -339,9 +343,13 @@ func TestRenameDestinationRulePayloadProcessing(t *testing.T) {
 	}
 	host, _, _ := unstructured.NestedString(out[0].Object, "spec", "host")
 	sni, _, _ := unstructured.NestedString(out[0].Object, "spec", "trafficPolicy", "tls", "sni")
+	sans, _, _ := unstructured.NestedStringSlice(out[0].Object, "spec", "trafficPolicy", "tls", "subjectAltNames")
 	wantFQDN := want + ".istio-system.svc.cluster.local"
 	if host != wantFQDN || sni != wantFQDN {
 		t.Fatalf("host/sni = %q/%q, want %q", host, sni, wantFQDN)
+	}
+	if len(sans) != 1 || sans[0] != wantFQDN {
+		t.Fatalf("subjectAltNames = %v, want [%q]", sans, wantFQDN)
 	}
 }
 
@@ -356,6 +364,11 @@ func TestRenameDestinationRulePreProcessing(t *testing.T) {
 	if got := out[0].GetName(); got != want {
 		t.Fatalf("name = %q, want %q", got, want)
 	}
+	wantFQDN := want + ".istio-system.svc.cluster.local"
+	sans, _, _ := unstructured.NestedStringSlice(out[0].Object, "spec", "trafficPolicy", "tls", "subjectAltNames")
+	if len(sans) != 1 || sans[0] != wantFQDN {
+		t.Fatalf("subjectAltNames = %v, want [%q]", sans, wantFQDN)
+	}
 }
 
 // clusterPatch builds one EnvoyFilter CLUSTER-applyTo configPatch entry for
@@ -369,7 +382,19 @@ func clusterPatch(clusterName, address string) map[string]any {
 			"value": map[string]any{
 				"name": clusterName,
 				"transport_socket": map[string]any{
-					"typed_config": map[string]any{"sni": address},
+					"typed_config": map[string]any{
+						"sni": address,
+						"common_tls_context": map[string]any{
+							"validation_context": map[string]any{
+								"match_typed_subject_alt_names": []any{
+									map[string]any{
+										"san_type": "DNS",
+										"matcher":  map[string]any{"exact": address},
+									},
+								},
+							},
+						},
+					},
 				},
 				"load_assignment": map[string]any{
 					"cluster_name": clusterName,
@@ -471,6 +496,17 @@ func assertClusterAddress(t *testing.T, value map[string]any, wantFQDN string) {
 	if err != nil || sni != wantFQDN {
 		t.Fatalf("sni = %q (err=%v), want %q", sni, err, wantFQDN)
 	}
+	sans, found, err := unstructured.NestedSlice(value,
+		"transport_socket", "typed_config", "common_tls_context", "validation_context",
+		"match_typed_subject_alt_names")
+	if err != nil || !found || len(sans) == 0 {
+		t.Fatalf("match_typed_subject_alt_names missing (err=%v found=%v)", err, found)
+	}
+	san0 := mustMap(t, sans[0])
+	matcher := mustMap(t, san0["matcher"])
+	if matcher["exact"] != wantFQDN {
+		t.Fatalf("san matcher.exact = %v, want %q", matcher["exact"], wantFQDN)
+	}
 
 	loadAssignment := mustMap(t, value["load_assignment"])
 	endpoints := mustSlice(t, loadAssignment["endpoints"])
@@ -482,6 +518,34 @@ func assertClusterAddress(t *testing.T, value map[string]any, wantFQDN string) {
 	socketAddress := mustMap(t, address["socket_address"])
 	if socketAddress["address"] != wantFQDN {
 		t.Fatalf("socket_address.address = %v, want %q", socketAddress["address"], wantFQDN)
+	}
+}
+
+func TestSetClusterUpstreamAddressRequiresSANMatchers(t *testing.T) {
+	t.Parallel()
+	value := map[string]any{
+		"transport_socket": map[string]any{
+			"typed_config": map[string]any{"sni": "old.example"},
+		},
+		"load_assignment": map[string]any{
+			"endpoints": []any{
+				map[string]any{
+					"lb_endpoints": []any{
+						map[string]any{
+							"endpoint": map[string]any{
+								"address": map[string]any{
+									"socket_address": map[string]any{"address": "old.example"},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	err := setClusterUpstreamAddress(value, "new.example")
+	if err == nil || !strings.Contains(err.Error(), "match_typed_subject_alt_names") {
+		t.Fatalf("error = %v, want fail-closed SAN matcher error", err)
 	}
 }
 

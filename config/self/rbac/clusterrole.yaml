@@ -75,10 +75,11 @@ rules:
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 # Delete leftover payload-processing-reader ClusterRoleBindings from older
 # installs. ExtProc no longer receives that binding. Names are dynamic per
-# tenant, so this can't be scoped down with resourceNames.
+# tenant, so this can't be scoped down with resourceNames. get+delete only:
+# the controller never creates or updates these bindings.
 - apiGroups: ["rbac.authorization.k8s.io"]
-  resources: ["clusterroles", "clusterrolebindings"]
-  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  resources: ["clusterrolebindings"]
+  verbs: ["get", "delete"]
 # A Role and RoleBinding in the infra namespace, where ODH and RHOAI run the
 # NemoGuardrails workload, let the tenant post-auth ServiceAccount get the
 # NeMo Service, which is what kube-rbac-proxy checks. Trust boundary: the

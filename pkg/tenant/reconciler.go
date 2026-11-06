@@ -583,7 +583,8 @@ func (r *Reconciler) reconcilePraxis(ctx context.Context, log logr.Logger, mtc *
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("read authoritative MaaS apiTranslation setting: %w", err)
 	}
-	if err := configureSharedExtProc(resources, tenantID, gatewayNamespace, apiTranslation); err != nil {
+	extProcMaxBodyBytes := resolveExtProcMaxBodyBytes(mtc, log)
+	if err := configureSharedExtProc(resources, tenantID, gatewayNamespace, apiTranslation, extProcMaxBodyBytes); err != nil {
 		return ctrl.Result{}, fmt.Errorf("configure shared ExtProc: %w", err)
 	}
 	tenantNamespace := mtc.GetNamespace()
@@ -607,7 +608,7 @@ func (r *Reconciler) reconcilePraxis(ctx context.Context, log logr.Logger, mtc *
 		return ctrl.Result{}, fmt.Errorf("split ExternalModel ExtProc resources: %w", err)
 	}
 	if serving {
-		if err := configureExternalModelExtProc(resources, tenantID, tenantNamespace, runtimeCandidates, apiTranslation); err != nil {
+		if err := configureExternalModelExtProc(resources, tenantID, tenantNamespace, runtimeCandidates, apiTranslation, extProcMaxBodyBytes); err != nil {
 			return ctrl.Result{}, fmt.Errorf("configure ExternalModel ExtProc: %w", err)
 		}
 	} else {
@@ -616,6 +617,9 @@ func (r *Reconciler) reconcilePraxis(ctx context.Context, log logr.Logger, mtc *
 	extProcMaxRequests := resolveExtProcMaxRequests(mtc, log)
 	if err := configureExtProcConcurrency(resources, extProcMaxRequests); err != nil {
 		return ctrl.Result{}, fmt.Errorf("configure ExtProc concurrency: %w", err)
+	}
+	if err := configureExtProcMaxBodyBytes(resources, extProcMaxBodyBytes); err != nil {
+		return ctrl.Result{}, fmt.Errorf("configure ExtProc max body bytes: %w", err)
 	}
 	if r.SkipNetworkPolicy {
 		filtered := make([]unstructured.Unstructured, 0, len(resources))
@@ -702,6 +706,11 @@ func (r *Reconciler) reconcilePraxis(ctx context.Context, log logr.Logger, mtc *
 	// releases. ExtProc is the dataplane; ExternalModel routes backend to
 	// provider ExternalName Services directly.
 	if err := r.deleteStandalonePraxis(ctx, tenantID, tenantNamespace); err != nil {
+		return ctrl.Result{}, err
+	}
+	// Drop leftover reader bindings from older installs. ExtProc must not hold
+	// API grants; both the main and post-split binding names may still exist.
+	if err := r.deleteResourceIfOwned(ctx, gvkClusterRoleBinding, PayloadProcessingReaderClusterRoleBindingNameForTenant(tenantID), ""); err != nil {
 		return ctrl.Result{}, err
 	}
 	if err := r.deleteResourceIfOwned(ctx, gvkClusterRoleBinding, PayloadProcessingReaderClusterRoleBindingPostNameForTenant(tenantID), ""); err != nil {

@@ -254,6 +254,9 @@ func renamePayloadDestinationRule(u *unstructured.Unstructured, serviceName, nam
 	if err := unstructured.SetNestedField(u.Object, fqdn, "spec", "trafficPolicy", "tls", "sni"); err != nil {
 		return fmt.Errorf("sni: %w", err)
 	}
+	if err := unstructured.SetNestedStringSlice(u.Object, []string{fqdn}, "spec", "trafficPolicy", "tls", "subjectAltNames"); err != nil {
+		return fmt.Errorf("subjectAltNames: %w", err)
+	}
 	return nil
 }
 
@@ -366,27 +369,30 @@ func setClusterUpstreamAddress(value map[string]any, fqdn string) error {
 	if err := unstructured.SetNestedField(value, fqdn, "transport_socket", "typed_config", "sni"); err != nil {
 		return fmt.Errorf("sni: %w", err)
 	}
-	if sans, found, err := unstructured.NestedSlice(value,
+	sans, found, err := unstructured.NestedSlice(value,
+		"transport_socket", "typed_config", "common_tls_context", "validation_context",
+		"match_typed_subject_alt_names")
+	if err != nil {
+		return fmt.Errorf("read san matchers: %w", err)
+	}
+	if !found || len(sans) == 0 {
+		return errors.New("match_typed_subject_alt_names is required (fail-closed TLS SAN verification)")
+	}
+	san0, ok := sans[0].(map[string]any)
+	if !ok {
+		return errors.New("match_typed_subject_alt_names[0] is not an object")
+	}
+	matcher, ok := san0["matcher"].(map[string]any)
+	if !ok {
+		return errors.New("san matcher is not an object")
+	}
+	matcher["exact"] = fqdn
+	san0["matcher"] = matcher
+	sans[0] = san0
+	if err := unstructured.SetNestedSlice(value, sans,
 		"transport_socket", "typed_config", "common_tls_context", "validation_context",
 		"match_typed_subject_alt_names"); err != nil {
-		return fmt.Errorf("read san matchers: %w", err)
-	} else if found && len(sans) > 0 {
-		san0, ok := sans[0].(map[string]any)
-		if !ok {
-			return errors.New("match_typed_subject_alt_names[0] is not an object")
-		}
-		matcher, ok := san0["matcher"].(map[string]any)
-		if !ok {
-			return errors.New("san matcher is not an object")
-		}
-		matcher["exact"] = fqdn
-		san0["matcher"] = matcher
-		sans[0] = san0
-		if err := unstructured.SetNestedSlice(value, sans,
-			"transport_socket", "typed_config", "common_tls_context", "validation_context",
-			"match_typed_subject_alt_names"); err != nil {
-			return fmt.Errorf("write san matchers: %w", err)
-		}
+		return fmt.Errorf("write san matchers: %w", err)
 	}
 
 	loadAssignment, ok := value["load_assignment"].(map[string]any)

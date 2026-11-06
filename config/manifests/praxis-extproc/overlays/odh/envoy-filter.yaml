@@ -418,20 +418,29 @@ spec:
           type: STRICT_DNS
           connect_timeout: 10s
           lb_policy: ROUND_ROBIN
-          # Default ExtProc concurrency budget. ai-gateway-controller may override
-          # via MaasTenantConfig annotation maas.opendatahub.io/experimental-extproc-max-requests.
-          # max_retries is intentionally omitted: without a retry_policy it is a no-op.
+          # Default ExtProc concurrency budget (paired with max_body_bytes 10 MiB).
+          # Tunable in ai-gateway-controller via MaasTenantConfig annotation
+          # maas.opendatahub.io/experimental-extproc-max-requests (also sets streams).
+          # max_retries omitted: without a retry_policy it is a no-op.
           circuit_breakers:
             thresholds:
-              - max_connections: 32
-                max_pending_requests: 32
-                max_requests: 32
+              - max_connections: 8
+                max_pending_requests: 8
+                max_requests: 8
           typed_extension_protocol_options:
             envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
               "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
               explicit_http_config:
                 http2_protocol_options:
-                  max_concurrent_streams: 32
+                  connection_keepalive:
+                    interval: 5s
+                    timeout: 5s
+                  max_concurrent_streams: 8
+          upstream_connection_options:
+            tcp_keepalive:
+              keepalive_time: 120
+              keepalive_interval: 30
+              keepalive_probes: 3
           transport_socket:
             name: envoy.transport_sockets.tls
             typed_config:
@@ -465,17 +474,29 @@ spec:
           type: STRICT_DNS
           connect_timeout: 10s
           lb_policy: ROUND_ROBIN
+          # Default ExtProc concurrency budget (paired with max_body_bytes 10 MiB).
+          # Tunable in ai-gateway-controller via MaasTenantConfig annotation
+          # maas.opendatahub.io/experimental-extproc-max-requests (also sets streams).
+          # max_retries omitted: without a retry_policy it is a no-op.
           circuit_breakers:
             thresholds:
-              - max_connections: 32
-                max_pending_requests: 32
-                max_requests: 32
+              - max_connections: 8
+                max_pending_requests: 8
+                max_requests: 8
           typed_extension_protocol_options:
             envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
               "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
               explicit_http_config:
                 http2_protocol_options:
-                  max_concurrent_streams: 32
+                  connection_keepalive:
+                    interval: 5s
+                    timeout: 5s
+                  max_concurrent_streams: 8
+          upstream_connection_options:
+            tcp_keepalive:
+              keepalive_time: 120
+              keepalive_interval: 30
+              keepalive_probes: 3
           transport_socket:
             name: envoy.transport_sockets.tls
             typed_config:
