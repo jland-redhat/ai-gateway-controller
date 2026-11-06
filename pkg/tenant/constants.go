@@ -128,8 +128,8 @@ const (
 	// DefaultExtProcMaxRequests is the ExtProc upstream concurrency budget when
 	// AnnotationExtProcMaxRequests is absent. It is a hard Envoy circuit-breaker
 	// cap (not a soft hint) chosen to bound ExtProc memory under large bodies
-	// (paired with DefaultExtProcMaxBodyBytes: 8×10 MiB ≈ 80 MiB under a
-	// 256 MiB ExtProc limit).
+	// (paired with DefaultExtProcMaxBodyBytes: 8×10 MiB; measured peak is
+	// ~50 MiB/request so ODH pre/post pods default to a 512 MiB limit).
 	DefaultExtProcMaxRequests int64 = 8
 
 	// MaxExtProcMaxRequests bounds AnnotationExtProcMaxRequests (Envoy's own
