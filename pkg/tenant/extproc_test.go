@@ -139,6 +139,7 @@ func TestExternalModelConfigMatchesMainWhenTranslationIsOff(t *testing.T) {
   grpc_address: "0.0.0.0:9004"
   health_address: "0.0.0.0:50052"
   metrics_address: "0.0.0.0:9090"
+  max_body_bytes: 10485760
   tls:
     mode: provided
     cert_path: /etc/tls/private/tls.crt
@@ -179,9 +180,6 @@ filter_chains:
         reload: {enabled: true, debounce_ms: 500}
       - filter: stream_usage_inject
         max_body_bytes: 10485760
-
-insecure_options:
-  allow_unbounded_body: true
 `
 	if config != want {
 		t.Fatalf("translation-off ExtProc config differs from pinned main:\n--- got ---\n%s\n--- want ---\n%s", config, want)
@@ -330,6 +328,9 @@ func TestSharedExtProcConfigDefaultOff(t *testing.T) {
 	// report usage, as IPP's include_usage injection made them do.
 	if !strings.Contains(config, "filter: request_id\n      - filter: stream_usage_inject\n        max_body_bytes: 10485760\n") {
 		t.Fatalf("default shared chain does not inject stream usage:\n%s", config)
+	}
+	if !strings.Contains(config, "  max_body_bytes: 10485760\n") || strings.Contains(config, "allow_unbounded_body") {
+		t.Fatalf("default shared chain must keep the ODH server body bound:\n%s", config)
 	}
 }
 
@@ -585,15 +586,17 @@ func TestTranslationSettingsToggleWithoutStaleRenderedState(t *testing.T) {
 		if !strings.Contains(externalConfig, "filter: stream_usage_inject") {
 			t.Fatalf("ExternalModel chain lost stream_usage_inject")
 		}
+		if strings.Contains(externalConfig, "allow_unbounded_body: true") ||
+			!strings.Contains(externalConfig, "\n  max_body_bytes:") {
+			t.Fatalf("ExternalModel server body bound missing/unbounded for enabled=%t:\n%s", enabled, externalConfig)
+		}
 		if enabled && (!strings.Contains(externalConfig, "max_request_body_bytes: 10485760") ||
-			!strings.Contains(externalConfig, "max_response_body_bytes: 1048576") ||
-			strings.Contains(externalConfig, "allow_unbounded_body: true")) {
+			!strings.Contains(externalConfig, "max_response_body_bytes: 1048576")) {
 			t.Fatalf("translation-on body limits are not rendered for enabled=true:\n%s", externalConfig)
 		}
-		if !enabled && (strings.Contains(externalConfig, "\n  max_body_bytes:") || strings.Contains(externalConfig, "max_request_body_bytes") ||
-			strings.Contains(externalConfig, "max_response_body_bytes") ||
-			!strings.Contains(externalConfig, "allow_unbounded_body: true")) {
-			t.Fatalf("translation-off body limits are stale for enabled=false:\n%s", externalConfig)
+		if !enabled && (strings.Contains(externalConfig, "max_request_body_bytes") ||
+			strings.Contains(externalConfig, "max_response_body_bytes")) {
+			t.Fatalf("translation-off must omit translation body limits for enabled=false:\n%s", externalConfig)
 		}
 	}
 }

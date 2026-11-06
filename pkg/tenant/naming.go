@@ -147,3 +147,15 @@ func PayloadProcessingReaderClusterRoleBindingNameForTenant(tenantID string) str
 func PayloadProcessingReaderClusterRoleBindingPostNameForTenant(tenantID string) string {
 	return ResourceName(PayloadProcessingReaderClusterRoleBindingName+"-post", tenantID)
 }
+
+func PayloadProcessingMetricsAuthClusterRoleBindingNameForTenant(tenantID string) string {
+	return ResourceName(PayloadProcessingMetricsAuthName, tenantID)
+}
+
+func PayloadProcessingMetricsServiceNameForTenant(tenantID string) string {
+	return ResourceName(PayloadProcessingMetricsServiceName, tenantID)
+}
+
+func PayloadProcessingMetricsMonitorNameForTenant(tenantID string) string {
+	return ResourceName(PayloadProcessingMetricsMonitorName, tenantID)
+}

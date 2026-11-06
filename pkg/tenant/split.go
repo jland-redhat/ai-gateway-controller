@@ -13,6 +13,7 @@ package tenant
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
@@ -74,7 +75,11 @@ func SplitPostAuthResources(resources []unstructured.Unstructured, tenantID, gat
 				}
 				out = append(out, *u)
 			case u.GetKind() == "ClusterRoleBinding":
-				// Drop leftover reader bindings; ExtProc must not hold API grants.
+				if isLegacyReaderClusterRoleBinding(u.GetName()) {
+					// Drop leftover reader bindings; ExtProc must not hold secrets get.
+					continue
+				}
+				out = append(out, *u)
 			default:
 				out = append(out, *u)
 			}
@@ -143,12 +148,23 @@ func SplitPostAuthResources(resources []unstructured.Unstructured, tenantID, gat
 			}
 			out = append(out, *u)
 		case u.GetKind() == "ClusterRoleBinding":
-			// Drop leftover reader bindings; ExtProc must not hold API grants.
+			if isLegacyReaderClusterRoleBinding(u.GetName()) {
+				// Drop leftover reader bindings; ExtProc must not hold secrets get.
+				continue
+			}
+			out = append(out, *u)
 		default:
 			out = append(out, *u)
 		}
 	}
 	return out, nil
+}
+
+// isLegacyReaderClusterRoleBinding reports whether name is a leftover
+// payload-processing-reader binding (possibly tenant-suffixed / -post).
+// Metrics-auth / metrics-reader bindings must be kept.
+func isLegacyReaderClusterRoleBinding(name string) bool {
+	return strings.HasPrefix(name, PayloadProcessingReaderClusterRoleBindingName)
 }
 
 // RemoveExternalModelResources removes the credential-bearing, tenant-local

@@ -275,7 +275,7 @@ func TestRenameNetworkPolicyReplacesPodSelector(t *testing.T) {
 	}
 }
 
-func TestRenameLeavesClusterRoleBindingUntouched(t *testing.T) {
+func TestRenameLeavesReaderClusterRoleBindingUntouched(t *testing.T) {
 	in := []unstructured.Unstructured{{Object: map[string]any{
 		"apiVersion": "rbac.authorization.k8s.io/v1",
 		"kind":       "ClusterRoleBinding",
@@ -290,7 +290,7 @@ func TestRenameLeavesClusterRoleBindingUntouched(t *testing.T) {
 		t.Fatalf("Rename: %v", err)
 	}
 	if got := out[0].GetName(); got != PayloadProcessingReaderClusterRoleBindingName {
-		t.Fatalf("name = %q, want unchanged %q (bindings are dropped later, not renamed)", got, PayloadProcessingReaderClusterRoleBindingName)
+		t.Fatalf("name = %q, want unchanged %q (reader bindings are dropped later, not renamed)", got, PayloadProcessingReaderClusterRoleBindingName)
 	}
 	subjects, _, _ := unstructured.NestedSlice(out[0].Object, "subjects")
 	subject0, ok := subjects[0].(map[string]any)
@@ -299,6 +299,35 @@ func TestRenameLeavesClusterRoleBindingUntouched(t *testing.T) {
 	}
 	if subject0["name"] != PayloadProcessingName {
 		t.Fatalf("subjects[0].name = %v, want unchanged %q", subject0["name"], PayloadProcessingName)
+	}
+}
+
+func TestRenameRewritesMetricsAuthBinding(t *testing.T) {
+	in := []unstructured.Unstructured{{Object: map[string]any{
+		"apiVersion": "rbac.authorization.k8s.io/v1",
+		"kind":       "ClusterRoleBinding",
+		"metadata":   map[string]any{"name": PayloadProcessingMetricsAuthName},
+		"subjects": []any{
+			map[string]any{"kind": "ServiceAccount", "name": PayloadProcessingName, "namespace": "istio-system"},
+		},
+	}}}
+
+	out, err := Rename(in, "redteam", "istio-system")
+	if err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+	wantName := PayloadProcessingMetricsAuthClusterRoleBindingNameForTenant("redteam")
+	if got := out[0].GetName(); got != wantName {
+		t.Fatalf("name = %q, want %q", got, wantName)
+	}
+	subjects, _, _ := unstructured.NestedSlice(out[0].Object, "subjects")
+	subject0, ok := subjects[0].(map[string]any)
+	if !ok {
+		t.Fatalf("subjects[0] is %T, want map[string]any", subjects[0])
+	}
+	wantSA := PayloadProcessingServiceAccountName("redteam")
+	if subject0["name"] != wantSA {
+		t.Fatalf("subjects[0].name = %v, want %q", subject0["name"], wantSA)
 	}
 }
 

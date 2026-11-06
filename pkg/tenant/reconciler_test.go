@@ -1232,6 +1232,9 @@ func expectedCleanupNames(tenantID string) []string {
 		PayloadProcessingNetworkPolicyName(tenantID),
 		PayloadProcessingEnvoyFilterName(tenantID),
 		PayloadProcessingReaderClusterRoleBindingNameForTenant(tenantID),
+		PayloadProcessingMetricsAuthClusterRoleBindingNameForTenant(tenantID),
+		PayloadProcessingMetricsServiceNameForTenant(tenantID),
+		PayloadProcessingMetricsMonitorNameForTenant(tenantID),
 		PayloadProcessingHPAName(tenantID),
 		PayloadPreProcessingHPAName(tenantID),
 	}
@@ -1261,6 +1264,9 @@ func seedPraxisOwnedForCleanup(tenantID, namespace string) []client.Object {
 		mk(gvkDestinationRule, PayloadProcessingServiceName(tenantID), namespace),
 		mk(gvkDestinationRule, PayloadPreProcessingServiceName(tenantID), namespace),
 		mk(gvkClusterRoleBinding, PayloadProcessingReaderClusterRoleBindingNameForTenant(tenantID), ""),
+		mk(gvkClusterRoleBinding, PayloadProcessingMetricsAuthClusterRoleBindingNameForTenant(tenantID), ""),
+		mk(gvkService, PayloadProcessingMetricsServiceNameForTenant(tenantID), namespace),
+		mk(gvkServiceMonitor, PayloadProcessingMetricsMonitorNameForTenant(tenantID), namespace),
 		mk(gvkHPA, PayloadProcessingHPAName(tenantID), namespace),
 		mk(gvkHPA, PayloadPreProcessingHPAName(tenantID), namespace),
 	}

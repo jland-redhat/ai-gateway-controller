@@ -184,6 +184,10 @@ func sharedExtProcConfig(apiTranslation bool, maxBodyBytes int64) string {
 	b.WriteString("  grpc_address: \"0.0.0.0:9004\"\n")
 	b.WriteString("  health_address: \"0.0.0.0:50052\"\n")
 	b.WriteString("  metrics_address: \"0.0.0.0:9090\"\n")
+	// Bound every buffered body at the server, matching the vendored ODH
+	// ConfigMap. Do not set insecure_options.allow_unbounded_body: after
+	// RHOAIENG-102139 that flag leaves streamed bodies uncapped.
+	fmt.Fprintf(&b, "  max_body_bytes: %d\n", maxBodyBytes)
 	b.WriteString("  tls:\n")
 	b.WriteString("    mode: provided\n")
 	b.WriteString("    cert_path: /etc/tls/private/tls.crt\n")
@@ -246,8 +250,6 @@ func sharedExtProcConfig(apiTranslation bool, maxBodyBytes int64) string {
 		b.WriteString("          - when:\n")
 		b.WriteString("              path: \"/v1/messages\"\n")
 	}
-	b.WriteString("\ninsecure_options:\n")
-	b.WriteString("  allow_unbounded_body: true\n")
 	return b.String()
 }
 
@@ -525,13 +527,14 @@ func extprocPostAuthConfig(candidates []envelope.Candidate, credentials []extpro
 	var b strings.Builder
 	b.WriteString("server:\n  grpc_address: \"0.0.0.0:9004\"\n  health_address: \"0.0.0.0:50052\"\n")
 	b.WriteString("  metrics_address: \"0.0.0.0:9090\"\n")
-	// Bound buffered translation work only when the tenant opts in. With
-	// translation disabled, omit the translation and provider-profile filters
-	// and retain main's unbounded-body setting. Accumulation keeps a small
-	// overhead above the request budget for model-rewrite copies.
+	// Always bound at the server (ODH 10 MiB default / tenant annotation).
+	// Translation keeps a small overhead above the request budget for
+	// model-rewrite copies. Never emit allow_unbounded_body (RHOAIENG-102139).
+	serverBody := maxBodyBytes
 	if apiTranslationEnabled {
-		fmt.Fprintf(&b, "  max_body_bytes: %d\n", maxBodyBytes+anthropicTranslationAccumulationOverhead)
+		serverBody = maxBodyBytes + anthropicTranslationAccumulationOverhead
 	}
+	fmt.Fprintf(&b, "  max_body_bytes: %d\n", serverBody)
 	b.WriteString("  tls:\n    mode: provided\n    cert_path: /etc/tls/private/tls.crt\n    key_path: /etc/tls/private/tls.key\n\n")
 	// headers must stay first: it strips caller credentials and internal MaaS
 	// identity headers before intelligent_route / credential_inject run, so
@@ -577,9 +580,6 @@ func extprocPostAuthConfig(candidates []envelope.Candidate, credentials []extpro
 			}
 			fmt.Fprintf(&b, "            file: %s\n", credential.file)
 		}
-	}
-	if !apiTranslationEnabled {
-		b.WriteString("\ninsecure_options:\n  allow_unbounded_body: true\n")
 	}
 	return b.String()
 }

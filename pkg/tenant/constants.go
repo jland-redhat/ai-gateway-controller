@@ -209,10 +209,17 @@ const (
 	PayloadPreProcessingName                      = "payload-pre-processing"
 	PayloadProcessingPluginsConfigMapName         = "payload-processing-plugins"
 	PayloadProcessingReaderClusterRoleBindingName = "payload-processing-reader" // retained for leftover binding cleanup
-	PayloadProcessingExternalModelFilterName      = "payload-processing-external-model-filters"
-	servingCertSecretAnnotation                   = "service.beta.openshift.io/serving-cert-secret-name" //nolint:gosec // G101: annotation key name, not a credential
-	reloaderSecretAnnotation                      = "secret.reloader.stakater.com/reload"
-	grpcMaxRecvMsgSizeEnv                         = "GRPC_MAX_RECV_MSG_SIZE"
+	// Metrics RBAC / scrape resources from praxis-extproc (#57 / #177). The
+	// metrics-auth binding is tenant-suffixed because it names the ExtProc SA;
+	// ClusterRoles and the metrics-reader binding stay shared/unsuffixed.
+	PayloadProcessingMetricsAuthName         = "payload-processing-metrics-auth"
+	PayloadProcessingMetricsReaderName       = "payload-processing-metrics-reader"
+	PayloadProcessingMetricsServiceName      = "payload-processing-metrics"
+	PayloadProcessingMetricsMonitorName      = "payload-processing-metrics"
+	PayloadProcessingExternalModelFilterName = "payload-processing-external-model-filters"
+	servingCertSecretAnnotation              = "service.beta.openshift.io/serving-cert-secret-name" //nolint:gosec // G101: annotation key name, not a credential
+	reloaderSecretAnnotation                 = "secret.reloader.stakater.com/reload"
+	grpcMaxRecvMsgSizeEnv                    = "GRPC_MAX_RECV_MSG_SIZE"
 	// grpcRecvFramingHeadroomBytes matches praxis-extproc GRPC_RECV_FRAMING_HEADROOM
 	// so GRPC_MAX_RECV_MSG_SIZE stays above server max_body_bytes.
 	grpcRecvFramingHeadroomBytes int64 = 1024 * 1024
@@ -280,6 +287,7 @@ var (
 	gvkEnvoyFilter        = schema.GroupVersionKind{Group: "networking.istio.io", Version: "v1alpha3", Kind: "EnvoyFilter"}
 	gvkDestinationRule    = schema.GroupVersionKind{Group: "networking.istio.io", Version: "v1", Kind: "DestinationRule"}
 	gvkClusterRoleBinding = schema.GroupVersionKind{Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "ClusterRoleBinding"}
+	gvkServiceMonitor     = schema.GroupVersionKind{Group: "monitoring.coreos.com", Version: "v1", Kind: "ServiceMonitor"}
 	gvkGateway            = schema.GroupVersionKind{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "Gateway"}
 	gvkHTTPRoute          = schema.GroupVersionKind{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "HTTPRoute"}
 	gvkHPA                = schema.GroupVersionKind{Group: "autoscaling", Version: "v2", Kind: "HorizontalPodAutoscaler"}

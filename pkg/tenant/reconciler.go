@@ -1304,6 +1304,9 @@ func (r *Reconciler) cleanup(ctx context.Context, tenantID, gatewayNamespace, te
 		{gvkDestinationRule, PayloadProcessingExternalModelServiceName(tenantID), tenantNamespace},
 		{gvkClusterRoleBinding, PayloadProcessingReaderClusterRoleBindingNameForTenant(tenantID), ""},
 		{gvkClusterRoleBinding, PayloadProcessingReaderClusterRoleBindingPostNameForTenant(tenantID), ""},
+		{gvkClusterRoleBinding, PayloadProcessingMetricsAuthClusterRoleBindingNameForTenant(tenantID), ""},
+		{gvkService, PayloadProcessingMetricsServiceNameForTenant(tenantID), gatewayNamespace},
+		{gvkServiceMonitor, PayloadProcessingMetricsMonitorNameForTenant(tenantID), gatewayNamespace},
 		{gvkHPA, PayloadProcessingHPAName(tenantID), gatewayNamespace},
 		{gvkHPA, PayloadPreProcessingHPAName(tenantID), gatewayNamespace},
 	}

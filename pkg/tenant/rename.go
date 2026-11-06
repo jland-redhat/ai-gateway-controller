@@ -33,12 +33,12 @@ import (
 // DestinationRule host/sni, ClusterRoleBinding subject) that would otherwise
 // still point at the unsuffixed names.
 //
-// ExtProc ServiceAccounts intentionally carry no ClusterRoleBinding: the
-// workload mounts projected credentials and must not inherit the legacy
-// payload-processing-reader API grants.
+// ExtProc must not inherit the legacy payload-processing-reader API grants.
+// The shared/pre-auth ServiceAccount does keep the metrics-auth binding
+// (TokenReview / SubjectAccessReview) so authenticated /metrics scrapes work.
 //
 // Next to the shared ServiceAccount it adds the post-auth ExtProc's own
-// ServiceAccount, which nothing binds.
+// ServiceAccount, which nothing binds (no API token, no ClusterRoleBinding).
 //
 // It does not mutate the input slice.
 func Rename(resources []unstructured.Unstructured, tenantID, namespace string) ([]unstructured.Unstructured, error) {
@@ -99,9 +99,76 @@ func renameOne(u *unstructured.Unstructured, tenantID, namespace string) error {
 		return renamePayloadDestinationRule(u, PayloadProcessingServiceName(tenantID), namespace)
 	case kind == "DestinationRule" && name == PayloadPreProcessingName:
 		return renamePayloadDestinationRule(u, PayloadPreProcessingServiceName(tenantID), namespace)
+	case kind == "Service" && name == PayloadProcessingMetricsServiceName:
+		return renamePayloadProcessingMetricsService(u, tenantID)
+	case kind == "ServiceMonitor" && name == PayloadProcessingMetricsMonitorName:
+		return renamePayloadProcessingMetricsMonitor(u, tenantID)
+	case kind == "ClusterRoleBinding" && name == PayloadProcessingMetricsAuthName:
+		return renamePayloadProcessingMetricsAuthBinding(u, tenantID)
 	}
-	// Everything else (notably the shared ClusterRole) passes through
-	// unchanged.
+	// Everything else (shared ClusterRoles, metrics-reader binding) passes
+	// through unchanged. Legacy payload-processing-reader bindings are dropped
+	// later in SplitPostAuthResources / cleanup.
+	return nil
+}
+
+func renamePayloadProcessingMetricsService(u *unstructured.Unstructured, tenantID string) error {
+	if err := setName(u, PayloadProcessingMetricsServiceNameForTenant(tenantID)); err != nil {
+		return err
+	}
+	deploymentName := PayloadProcessingDeploymentName(tenantID)
+	if err := setObjectLabel(u, LabelTenantInstance, deploymentName); err != nil {
+		return fmt.Errorf("tenant-instance label: %w", err)
+	}
+	if err := setServiceSelector(u, map[string]string{
+		"app":               PayloadProcessingName,
+		LabelTenantInstance: deploymentName,
+	}); err != nil {
+		return fmt.Errorf("selector: %w", err)
+	}
+	return nil
+}
+
+func renamePayloadProcessingMetricsMonitor(u *unstructured.Unstructured, tenantID string) error {
+	if err := setName(u, PayloadProcessingMetricsMonitorNameForTenant(tenantID)); err != nil {
+		return err
+	}
+	deploymentName := PayloadProcessingDeploymentName(tenantID)
+	if err := setObjectLabel(u, LabelTenantInstance, deploymentName); err != nil {
+		return fmt.Errorf("tenant-instance label: %w", err)
+	}
+	if err := unstructured.SetNestedStringMap(u.Object, map[string]string{
+		"app":                         PayloadProcessingName,
+		"app.kubernetes.io/component": "monitoring",
+		LabelTenantInstance:           deploymentName,
+	}, "spec", "selector", "matchLabels"); err != nil {
+		return fmt.Errorf("selector.matchLabels: %w", err)
+	}
+	return nil
+}
+
+func renamePayloadProcessingMetricsAuthBinding(u *unstructured.Unstructured, tenantID string) error {
+	if err := setName(u, PayloadProcessingMetricsAuthClusterRoleBindingNameForTenant(tenantID)); err != nil {
+		return err
+	}
+	subjects, found, err := unstructured.NestedSlice(u.Object, "subjects")
+	if err != nil {
+		return fmt.Errorf("read subjects: %w", err)
+	}
+	if !found || len(subjects) == 0 {
+		return errors.New("subjects are missing")
+	}
+	subject, ok := subjects[0].(map[string]any)
+	if !ok {
+		return errors.New("subject is malformed")
+	}
+	// Bind the shared/pre-auth SA (token automount stays enabled upstream for
+	// metrics auth). Post-auth and ExternalModel SAs intentionally stay unbound.
+	subject["name"] = PayloadProcessingServiceAccountName(tenantID)
+	subjects[0] = subject
+	if err := unstructured.SetNestedSlice(u.Object, subjects, "subjects"); err != nil {
+		return fmt.Errorf("write subjects: %w", err)
+	}
 	return nil
 }
 
