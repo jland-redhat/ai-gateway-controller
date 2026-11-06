@@ -103,9 +103,14 @@ func awaitPraxisInstalled(t *testing.T, c client.Client, namespace string) {
 		require.NoError(collect, c.Get(t.Context(), client.ObjectKey{Namespace: gatewayNamespace, Name: "payload-processing-" + namespace}, &deployment))
 		require.NotEmpty(collect, deployment.Spec.Template.Spec.Containers)
 		require.Equal(collect, "quay.io/example/praxis-extproc:test", deployment.Spec.Template.Spec.Containers[0].Image)
+		// ODH ExtProc mounts the SA token so metrics_auth can TokenReview/SAR
+		// (praxis-extproc #57 / #186). Post-auth still uses a dedicated SA with
+		// no ClusterRoleBinding; automount itself must stay true.
+		require.NotNil(collect, deployment.Spec.Template.Spec.AutomountServiceAccountToken)
+		require.True(collect, *deployment.Spec.Template.Spec.AutomountServiceAccountToken)
 		var binding rbacv1.ClusterRoleBinding
-		require.NoError(collect, c.Get(t.Context(), client.ObjectKey{Name: "payload-processing-reader-" + namespace}, &binding))
-		require.Equal(collect, "payload-processing-reader", binding.RoleRef.Name)
+		err := c.Get(t.Context(), client.ObjectKey{Name: "payload-processing-reader-" + namespace}, &binding)
+		require.True(collect, apierrors.IsNotFound(err), "reader ClusterRoleBinding must not be installed")
 	}, eventuallyTimeout, pollInterval, "the existing tenant must have its Praxis installation")
 }
 
