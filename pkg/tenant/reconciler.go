@@ -29,6 +29,7 @@ import (
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -650,6 +651,13 @@ func (r *Reconciler) reconcilePraxis(ctx context.Context, log logr.Logger, mtc *
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("compile NeMo callouts: %w", err)
 	}
+	// ServiceMonitor (and similar scrape CRs) are optional: clusters without
+	// prometheus-operator must still get ExtProc. Drop those kinds before the
+	// ownership gate / apply so a missing CRD cannot stall the whole install.
+	resources, err = r.omitOptionalUnavailableResources(ctx, log, resources)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
 	if err := r.waitForForeignOwnership(ctx, resources); err != nil {
 		log.Info("praxis-extproc resources are still owned by another controller; waiting for handoff", "error", err)
 		return ctrl.Result{RequeueAfter: constants.NotReadyRequeueInterval}, nil
@@ -727,6 +735,55 @@ func omitNetworkPolicies(resources []unstructured.Unstructured, skip bool, log l
 	}
 	log.Info("omitting controller-managed NetworkPolicy by explicit configuration", "namespace", namespace)
 	return filtered
+}
+
+// optionalInstallGVKs are rendered with praxis-extproc but must not block
+// ExtProc when their CRD is absent (e.g. prometheus-operator on kind/ODH).
+// Required kinds like EnvoyFilter stay hard-fail so a broken Istio install
+// cannot look like a successful apply.
+var optionalInstallGVKs = map[schema.GroupVersionKind]struct{}{
+	gvkServiceMonitor: {},
+}
+
+// omitOptionalUnavailableResources drops optional kinds whose API is not
+// registered on the cluster. A missing CRD returns NoMatch from Get, which
+// waitForForeignOwnership previously treated as a soft handoff wait and
+// stalled every ExtProc install.
+func (r *Reconciler) omitOptionalUnavailableResources(ctx context.Context, log logr.Logger, resources []unstructured.Unstructured) ([]unstructured.Unstructured, error) {
+	reader := r.APIReader
+	if reader == nil {
+		reader = r.Client
+	}
+	available := map[schema.GroupVersionKind]bool{}
+	out := make([]unstructured.Unstructured, 0, len(resources))
+	for i := range resources {
+		desired := &resources[i]
+		gvk := desired.GroupVersionKind()
+		if _, optional := optionalInstallGVKs[gvk]; !optional {
+			out = append(out, resources[i])
+			continue
+		}
+		ok, known := available[gvk]
+		if !known {
+			probe := desired.DeepCopy()
+			err := reader.Get(ctx, client.ObjectKeyFromObject(probe), probe)
+			switch {
+			case err == nil, apierrors.IsNotFound(err):
+				ok = true
+			case meta.IsNoMatchError(err):
+				ok = false
+				log.Info("omitting optional praxis-extproc resource; CRD not installed",
+					"gvk", gvk.String(), "name", desired.GetName(), "namespace", desired.GetNamespace())
+			default:
+				return nil, fmt.Errorf("probe optional %s %s/%s: %w", gvk.Kind, desired.GetNamespace(), desired.GetName(), err)
+			}
+			available[gvk] = ok
+		}
+		if ok {
+			out = append(out, resources[i])
+		}
+	}
+	return out, nil
 }
 
 func (r *Reconciler) resolvePraxisRuntimeCandidates(
@@ -1124,7 +1181,9 @@ func (r *Reconciler) waitForForeignOwnership(ctx context.Context, resources []un
 		current := &unstructured.Unstructured{}
 		current.SetGroupVersionKind(desired.GroupVersionKind())
 		if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(desired), current); err != nil {
-			if apierrors.IsNotFound(err) {
+			// NotFound: nothing to hand off from. NoMatch: CRD absent (optional
+			// kinds should already have been omitted; treat as absent anyway).
+			if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) {
 				continue
 			}
 			return fmt.Errorf("inspect %s %s/%s: %w", desired.GetKind(), desired.GetNamespace(), desired.GetName(), err)
@@ -1358,7 +1417,8 @@ func (r *Reconciler) deleteResourceIfOwned(ctx context.Context, gvk schema.Group
 	obj.SetName(name)
 	obj.SetNamespace(namespace)
 	if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(obj), obj); err != nil {
-		if apierrors.IsNotFound(err) {
+		// NoMatch: optional CRD was never installed (or was removed); nothing to delete.
+		if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) {
 			return nil
 		}
 		return fmt.Errorf("get %s %s/%s: %w", gvk.Kind, namespace, name, err)
