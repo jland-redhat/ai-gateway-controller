@@ -148,8 +148,12 @@ func renamePayloadProcessingDeployment(u *unstructured.Unstructured, tenantID st
 	if err := setConfigMapVolumeName(u, "plugins-config-volume", PayloadProcessingPluginsConfigMapForTenant(tenantID)); err != nil {
 		return fmt.Errorf("plugins ConfigMap volume: %w", err)
 	}
-	if err := setTLSSecretVolumeName(u, "tls", PayloadProcessingTLSSecretName(tenantID)); err != nil {
+	tlsSecret := PayloadProcessingTLSSecretName(tenantID)
+	if err := setTLSSecretVolumeName(u, "tls", tlsSecret); err != nil {
 		return fmt.Errorf("tls secret volume: %w", err)
+	}
+	if err := setReloaderSecretName(u, tlsSecret); err != nil {
+		return fmt.Errorf("reloader annotation: %w", err)
 	}
 	return nil
 }
@@ -182,8 +186,12 @@ func renamePayloadPreProcessingDeployment(u *unstructured.Unstructured, tenantID
 	if err := setConfigMapVolumeName(u, "plugins-config-volume", PayloadProcessingPluginsConfigMapForTenant(tenantID)); err != nil {
 		return fmt.Errorf("plugins ConfigMap volume: %w", err)
 	}
-	if err := setTLSSecretVolumeName(u, "tls", PayloadPreProcessingTLSSecretName(tenantID)); err != nil {
+	tlsSecret := PayloadPreProcessingTLSSecretName(tenantID)
+	if err := setTLSSecretVolumeName(u, "tls", tlsSecret); err != nil {
 		return fmt.Errorf("tls secret volume: %w", err)
+	}
+	if err := setReloaderSecretName(u, tlsSecret); err != nil {
+		return fmt.Errorf("reloader annotation: %w", err)
 	}
 	return nil
 }
@@ -543,6 +551,18 @@ func setServingCertSecretName(u *unstructured.Unstructured, secretName string) e
 		annotations = map[string]string{}
 	}
 	annotations[servingCertSecretAnnotation] = secretName
+	u.SetAnnotations(annotations)
+	return nil
+}
+
+// setReloaderSecretName points Reloader at the OpenShift serving-cert Secret so
+// pod rollouts track service-ca rotation for tenant-renamed TLS secret names.
+func setReloaderSecretName(u *unstructured.Unstructured, secretName string) error {
+	annotations := u.GetAnnotations()
+	if annotations == nil {
+		annotations = map[string]string{}
+	}
+	annotations[reloaderSecretAnnotation] = secretName
 	u.SetAnnotations(annotations)
 	return nil
 }

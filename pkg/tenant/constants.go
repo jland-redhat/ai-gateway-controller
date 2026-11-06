@@ -146,8 +146,9 @@ const (
 	// AnnotationExtProcMaxBodyBytes is absent (10 MiB).
 	DefaultExtProcMaxBodyBytes int64 = 10485760
 
-	// MaxExtProcMaxBodyBytes is the gRPC per-message ceiling (32 MiB) and the
-	// upper bound for AnnotationExtProcMaxBodyBytes.
+	// MaxExtProcMaxBodyBytes is the upper bound for AnnotationExtProcMaxBodyBytes
+	// (32 MiB). Deployments pair this with GRPC_MAX_RECV_MSG_SIZE = body + 1 MiB
+	// framing so tonic rejects oversized ExtProc messages before allocation.
 	MaxExtProcMaxBodyBytes int64 = 33554432
 
 	// LabelManagedByAITenant and LabelTenantName mirror maas-controller's
@@ -210,6 +211,11 @@ const (
 	PayloadProcessingReaderClusterRoleBindingName = "payload-processing-reader" // retained for leftover binding cleanup
 	PayloadProcessingExternalModelFilterName      = "payload-processing-external-model-filters"
 	servingCertSecretAnnotation                   = "service.beta.openshift.io/serving-cert-secret-name" //nolint:gosec // G101: annotation key name, not a credential
+	reloaderSecretAnnotation                      = "secret.reloader.stakater.com/reload"
+	grpcMaxRecvMsgSizeEnv                         = "GRPC_MAX_RECV_MSG_SIZE"
+	// grpcRecvFramingHeadroomBytes matches praxis-extproc GRPC_RECV_FRAMING_HEADROOM
+	// so GRPC_MAX_RECV_MSG_SIZE stays above server max_body_bytes.
+	grpcRecvFramingHeadroomBytes int64 = 1024 * 1024
 
 	// Legacy standalone names are retained only so cleanup can remove resources
 	// created before the ExtProc dataplane migration.

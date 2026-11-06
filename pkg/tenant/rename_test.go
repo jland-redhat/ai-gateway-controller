@@ -129,6 +129,9 @@ func TestRenameNonDefaultTenantPayloadProcessingDeployment(t *testing.T) {
 	if cmRef["name"] != "payload-processing-plugins-redteam" {
 		t.Fatalf("plugins ConfigMap volume ref = %q, want %q", cmRef["name"], "payload-processing-plugins-redteam")
 	}
+	if got := out[0].GetAnnotations()[reloaderSecretAnnotation]; got != PayloadProcessingTLSSecretName("redteam") {
+		t.Fatalf("reloader annotation = %q, want %q", got, PayloadProcessingTLSSecretName("redteam"))
+	}
 }
 
 func TestRenameNonDefaultTenantPreProcessingDeploymentSharesServiceAccount(t *testing.T) {
@@ -159,6 +162,9 @@ func TestRenameServiceAlwaysGetsTenantInstanceSelector(t *testing.T) {
 	selector, _, _ := unstructured.NestedStringMap(out[0].Object, "spec", "selector")
 	if selector["app"] != PayloadProcessingName || selector[LabelTenantInstance] != PayloadProcessingName {
 		t.Fatalf("selector = %v, want tenant-instance set even for the default tenant", selector)
+	}
+	if got := out[0].GetAnnotations()[servingCertSecretAnnotation]; got != PayloadProcessingTLSSecretName("") {
+		t.Fatalf("serving-cert annotation = %q, want %q (controller owns OpenShift annotation even when absent from base)", got, PayloadProcessingTLSSecretName(""))
 	}
 }
 

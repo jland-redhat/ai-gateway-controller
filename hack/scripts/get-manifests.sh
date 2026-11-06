@@ -8,11 +8,11 @@ set -euo pipefail
 #
 # TODO(pr217): manifests under config/manifests/praxis-extproc/ currently include
 # sensible-default edits synced from praxis-extproc PR #177 worktree (10 MiB
-# body, concurrency 8, no max_retries, subjectAltNames, X-Gateway-Model-Name
-# strip, SA automount + API egress for metrics, reloader). AGC keeps the 256 MiB
-# ExtProc memory limit (praxis worktree had 512 MiB from the prior 32 MiB body
-# era). Do NOT bump PRAXIS_EXTPROC_COMMIT until #177 merges; verify-manifests is
-# expected to mismatch against the pinned commit until then.
+# body, concurrency 8, GRPC_MAX_RECV_MSG_SIZE=11Mi, OpenShift serving-cert only
+# on ODH Services, subjectAltNames, X-Gateway-Model-Name strip, SA automount +
+# API egress for metrics, reloader). Do NOT bump PRAXIS_EXTPROC_COMMIT until
+# #177 merges; verify-manifests is expected to mismatch against the pinned
+# commit until then.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"

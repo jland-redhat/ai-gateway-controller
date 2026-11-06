@@ -621,6 +621,9 @@ func (r *Reconciler) reconcilePraxis(ctx context.Context, log logr.Logger, mtc *
 	if err := configureExtProcMaxBodyBytes(resources, extProcMaxBodyBytes); err != nil {
 		return ctrl.Result{}, fmt.Errorf("configure ExtProc max body bytes: %w", err)
 	}
+	if err := configureExtProcGrpcRecvMsgSize(resources, extProcMaxBodyBytes); err != nil {
+		return ctrl.Result{}, fmt.Errorf("configure ExtProc gRPC recv size: %w", err)
+	}
 	if r.SkipNetworkPolicy {
 		filtered := make([]unstructured.Unstructured, 0, len(resources))
 		for _, resource := range resources {

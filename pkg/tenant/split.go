@@ -216,8 +216,12 @@ func configureExternalModelDeployment(u *unstructured.Unstructured, tenantID str
 	if err := setConfigMapVolumeName(u, "plugins-config-volume", PayloadProcessingExternalModelPluginsConfigMapForTenant(tenantID)); err != nil {
 		return fmt.Errorf("ExternalModel ConfigMap volume: %w", err)
 	}
-	if err := setTLSSecretVolumeName(u, "tls", PayloadProcessingExternalModelTLSSecretName(tenantID)); err != nil {
+	tlsSecret := PayloadProcessingExternalModelTLSSecretName(tenantID)
+	if err := setTLSSecretVolumeName(u, "tls", tlsSecret); err != nil {
 		return fmt.Errorf("ExternalModel TLS secret volume: %w", err)
+	}
+	if err := setReloaderSecretName(u, tlsSecret); err != nil {
+		return fmt.Errorf("ExternalModel reloader annotation: %w", err)
 	}
 	volumes, _, err := unstructured.NestedSlice(u.Object, "spec", "template", "spec", "volumes")
 	if err != nil {
