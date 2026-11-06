@@ -17,6 +17,7 @@ limitations under the License.
 package tenant
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -40,7 +41,7 @@ func configureExtProcGrpcRecvMsgSize(resources []unstructured.Unstructured, maxB
 			continue
 		}
 		if err := setContainerEnvValue(dep, grpcMaxRecvMsgSizeEnv, value); err != nil {
-			return fmt.Errorf("Deployment %s/%s: %w", dep.GetNamespace(), dep.GetName(), err)
+			return fmt.Errorf("deployment %s/%s: %w", dep.GetNamespace(), dep.GetName(), err)
 		}
 		patched++
 	}
@@ -64,11 +65,11 @@ func setContainerEnvValue(dep *unstructured.Unstructured, envName, value string)
 		return fmt.Errorf("read containers: %w", err)
 	}
 	if !found || len(containers) == 0 {
-		return fmt.Errorf("containers not found")
+		return errors.New("containers not found")
 	}
 	container, ok := containers[0].(map[string]any)
 	if !ok {
-		return fmt.Errorf("container[0] is not an object")
+		return errors.New("container[0] is not an object")
 	}
 	env, _, err := unstructured.NestedSlice(container, "env")
 	if err != nil {

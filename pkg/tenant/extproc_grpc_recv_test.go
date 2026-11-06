@@ -69,7 +69,10 @@ func TestConfigureExtProcGrpcRecvMsgSize(t *testing.T) {
 
 	wantRecv := strconv.FormatInt(wantBody+grpcRecvFramingHeadroomBytes, 10)
 	containers, _, _ := unstructured.NestedSlice(resources[0].Object, "spec", "template", "spec", "containers")
-	container := containers[0].(map[string]any)
+	container, ok := containers[0].(map[string]any)
+	if !ok {
+		t.Fatalf("container[0] = %T, want object", containers[0])
+	}
 	env, _ := container["env"].([]any)
 	found := false
 	for _, raw := range env {
@@ -87,8 +90,11 @@ func TestConfigureExtProcGrpcRecvMsgSize(t *testing.T) {
 	}
 
 	otherContainers, _, _ := unstructured.NestedSlice(resources[1].Object, "spec", "template", "spec", "containers")
-	otherContainer := otherContainers[0].(map[string]any)
-	if _, ok := otherContainer["env"]; ok {
+	otherContainer, ok := otherContainers[0].(map[string]any)
+	if !ok {
+		t.Fatalf("other container[0] = %T, want object", otherContainers[0])
+	}
+	if _, hasEnv := otherContainer["env"]; hasEnv {
 		t.Fatalf("unrelated Deployment env mutated: %#v", otherContainer["env"])
 	}
 }

@@ -613,22 +613,10 @@ func (r *Reconciler) reconcilePraxis(ctx context.Context, log logr.Logger, mtc *
 	if err := configureExtProcConcurrency(resources, extProcMaxRequests); err != nil {
 		return ctrl.Result{}, fmt.Errorf("configure ExtProc concurrency: %w", err)
 	}
-	if err := configureExtProcMaxBodyBytes(resources, extProcMaxBodyBytes); err != nil {
-		return ctrl.Result{}, fmt.Errorf("configure ExtProc max body bytes: %w", err)
+	if err := configureExtProcBodyLimits(resources, extProcMaxBodyBytes); err != nil {
+		return ctrl.Result{}, err
 	}
-	if err := configureExtProcGrpcRecvMsgSize(resources, extProcMaxBodyBytes); err != nil {
-		return ctrl.Result{}, fmt.Errorf("configure ExtProc gRPC recv size: %w", err)
-	}
-	if r.SkipNetworkPolicy {
-		filtered := make([]unstructured.Unstructured, 0, len(resources))
-		for _, resource := range resources {
-			if resource.GetKind() != "NetworkPolicy" {
-				filtered = append(filtered, resource)
-			}
-		}
-		resources = filtered
-		log.Info("omitting controller-managed NetworkPolicy by explicit configuration", "namespace", gatewayNamespace)
-	}
+	resources = omitNetworkPolicies(resources, r.SkipNetworkPolicy, log, gatewayNamespace)
 	scaling := resolveIPPScaling(mtc, log)
 	if err := configureIPPScaling(log, &resources, tenantID, gatewayNamespace, scaling); err != nil {
 		return ctrl.Result{}, fmt.Errorf("configure IPP scaling: %w", err)
@@ -723,6 +711,22 @@ func (r *Reconciler) reconcilePraxis(ctx context.Context, log logr.Logger, mtc *
 		return ctrl.Result{RequeueAfter: constants.NotReadyRequeueInterval}, nil
 	}
 	return ctrl.Result{RequeueAfter: r.ResyncInterval}, nil
+}
+
+// omitNetworkPolicies drops controller-managed NetworkPolicies when the
+// Reconciler is configured to leave network policy ownership elsewhere.
+func omitNetworkPolicies(resources []unstructured.Unstructured, skip bool, log logr.Logger, namespace string) []unstructured.Unstructured {
+	if !skip {
+		return resources
+	}
+	filtered := make([]unstructured.Unstructured, 0, len(resources))
+	for _, resource := range resources {
+		if resource.GetKind() != "NetworkPolicy" {
+			filtered = append(filtered, resource)
+		}
+	}
+	log.Info("omitting controller-managed NetworkPolicy by explicit configuration", "namespace", namespace)
+	return filtered
 }
 
 func (r *Reconciler) resolvePraxisRuntimeCandidates(

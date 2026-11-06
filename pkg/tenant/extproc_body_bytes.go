@@ -96,6 +96,18 @@ func configureExtProcMaxBodyBytes(resources []unstructured.Unstructured, maxBody
 	return nil
 }
 
+// configureExtProcBodyLimits applies the shared body budget to plugin ConfigMaps
+// and pairs GRPC_MAX_RECV_MSG_SIZE with the same ceiling.
+func configureExtProcBodyLimits(resources []unstructured.Unstructured, maxBodyBytes int64) error {
+	if err := configureExtProcMaxBodyBytes(resources, maxBodyBytes); err != nil {
+		return fmt.Errorf("configure ExtProc max body bytes: %w", err)
+	}
+	if err := configureExtProcGrpcRecvMsgSize(resources, maxBodyBytes); err != nil {
+		return fmt.Errorf("configure ExtProc gRPC recv size: %w", err)
+	}
+	return nil
+}
+
 func isOwnedPluginConfigMap(name string) bool {
 	return strings.Contains(name, PayloadProcessingPluginsConfigMapName) ||
 		strings.HasPrefix(name, PayloadProcessingExternalModelName+"-plugins")

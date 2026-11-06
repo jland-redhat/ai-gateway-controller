@@ -73,13 +73,29 @@ rules:
 - apiGroups: ["networking.istio.io"]
   resources: ["envoyfilters", "destinationrules"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-# Delete leftover payload-processing-reader ClusterRoleBindings from older
-# installs. ExtProc no longer receives that binding. Names are dynamic per
-# tenant, so this can't be scoped down with resourceNames. get+delete only:
-# the controller never creates or updates these bindings.
+# ClusterRoleBindings for the vendored ExtProc metrics path
+# (payload-processing-metrics-auth / -metrics-reader) plus delete of leftover
+# payload-processing-reader bindings from older installs. Names are dynamic
+# per tenant, so this can't be scoped down with resourceNames. SSA needs
+# create/update/patch; cleanup of reader leftovers and tenant teardown needs
+# delete; get/list/watch for ownership checks and retries.
 - apiGroups: ["rbac.authorization.k8s.io"]
   resources: ["clusterrolebindings"]
-  verbs: ["get", "delete"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+# Shared ExtProc metrics ClusterRoles (TokenReview / SubjectAccessReview for
+# authenticated scrapes, plus the metrics-reader role Prometheus binds).
+# Applied from the vendored overlay; not tenant-suffixed. Creating the
+# metrics-reader ClusterRole also requires holding the granted privilege
+# (Kubernetes privilege-escalation check): get on nonResourceURL /metrics.
+- apiGroups: ["rbac.authorization.k8s.io"]
+  resources: ["clusterroles"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+- nonResourceURLs: ["/metrics"]
+  verbs: ["get"]
+# ServiceMonitor for ExtProc /metrics scrape wiring (monitoring.coreos.com).
+- apiGroups: ["monitoring.coreos.com"]
+  resources: ["servicemonitors"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 # A Role and RoleBinding in the infra namespace, where ODH and RHOAI run the
 # NemoGuardrails workload, let the tenant post-auth ServiceAccount get the
 # NeMo Service, which is what kube-rbac-proxy checks. Trust boundary: the
