@@ -144,9 +144,9 @@ type Reconciler struct {
 // DeployReady transitions (the apply path targets the Gateway they name, and
 // steady state returns without a requeue). Other status-only writes are
 // dropped. The MaasTenantConfig watch additionally admits changes to the
-	// AnnotationPayloadProcessingType and AnnotationExtProcResponseBodyMode
-	// annotations, which select the praxis vs legacy-IPP backend and the
-	// shared ExtProc response body mode without bumping metadata.generation.
+// AnnotationPayloadProcessingType and AnnotationExtProcResponseBodyMode
+// annotations, which select the praxis vs legacy-IPP backend and the
+// shared ExtProc response body mode without bumping metadata.generation.
 func tenantEventPredicates() map[string]predicate.Predicate {
 	aitenantUpdate := predicate.Funcs{
 		UpdateFunc: func(e event.UpdateEvent) bool {

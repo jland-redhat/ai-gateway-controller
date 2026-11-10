@@ -154,7 +154,7 @@ func TestMaasTenantConfigPredicate(t *testing.T) {
 			old: func(u *unstructured.Unstructured) {
 				u.SetAnnotations(map[string]string{AnnotationExtProcResponseBodyMode: "BUFFERED"})
 			},
-			new:  func(u *unstructured.Unstructured) { u.SetAnnotations(map[string]string{}) },
+			new:   func(u *unstructured.Unstructured) { u.SetAnnotations(map[string]string{}) },
 			admit: true,
 		},
 		{
