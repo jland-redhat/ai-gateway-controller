@@ -2006,10 +2006,24 @@ def wait_shared_ipp_response_body_mode(want, *, timeout=45):
     return last
 
 
+def response_body_mode_annotation_value():
+    mtc = json.loads(kubectl(
+        "-n", NAMESPACE, "get", "maastenantconfig", "default-tenant", "-o", "json").stdout)
+    return (mtc.get("metadata", {}).get("annotations") or {}).get(RESPONSE_BODY_MODE_ANNOTATION)
+
+
 def set_response_body_mode_annotation(value):
     if value is None:
-        kubectl("-n", NAMESPACE, "annotate", "maastenantconfig", "default-tenant",
-                f"{RESPONSE_BODY_MODE_ANNOTATION}-", check=False)
+        # Idempotent: already-absent annotations are success, not a kubectl error.
+        if response_body_mode_annotation_value() is None:
+            return
+        result = kubectl("-n", NAMESPACE, "annotate", "maastenantconfig", "default-tenant",
+                         f"{RESPONSE_BODY_MODE_ANNOTATION}-", check=False)
+        remaining = response_body_mode_annotation_value()
+        if remaining is not None:
+            raise RuntimeError(
+                f"failed to remove {RESPONSE_BODY_MODE_ANNOTATION}: still {remaining!r} "
+                f"(annotate rc={result.returncode})")
         return
     kubectl("-n", NAMESPACE, "annotate", "maastenantconfig", "default-tenant",
             f"{RESPONSE_BODY_MODE_ANNOTATION}={value}", "--overwrite")
@@ -2064,19 +2078,34 @@ def qualify_shared_extproc_response_body_mode_overrides():
 
         started = time.monotonic()
         set_response_body_mode_annotation(None)
+        # STREAMED alone is insufficient: apiTranslation already forces STREAMED
+        # under NONE, so prove the annotation itself was removed.
+        cleared_annotation = response_body_mode_annotation_value()
         cleared_mode = wait_shared_ipp_response_body_mode("STREAMED")
         record("shared_ipp_response_body_mode_annotation_cleared_to_streamed",
-               cleared_mode == "STREAMED",
-               {"mode": cleared_mode, "elapsed_s": round(time.monotonic() - started, 1)})
+               cleared_annotation is None and cleared_mode == "STREAMED",
+               {"mode": cleared_mode,
+                "annotation": cleared_annotation,
+                "annotation_removed": cleared_annotation is None,
+                "elapsed_s": round(time.monotonic() - started, 1)})
         save_json(EVIDENCE / "shared-ipp-response-body-mode-overrides.json", {
             "baseline": baseline_mode,
             "buffered": buffered_mode,
             "none_with_api_translation": constrained_mode,
             "cleared": cleared_mode,
+            "cleared_annotation": cleared_annotation,
         })
     finally:
-        set_response_body_mode_annotation(None)
-        wait_shared_ipp_response_body_mode("STREAMED", timeout=45)
+        try:
+            set_response_body_mode_annotation(None)
+        except Exception as exc:
+            CLEANUP_FAILURES.append(
+                f"clear {RESPONSE_BODY_MODE_ANNOTATION}: {redact_text(str(exc))}")
+        restored = wait_shared_ipp_response_body_mode("STREAMED", timeout=45)
+        if restored != "STREAMED":
+            CLEANUP_FAILURES.append(
+                "shared ipp response_body_mode cleanup timed out: "
+                f"want STREAMED, got {restored!r}")
 
 
 def capture_shared_runtime(label):
