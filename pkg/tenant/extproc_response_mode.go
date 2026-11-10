@@ -69,21 +69,30 @@ func resolveExtProcResponseBodyMode(mtc *unstructured.Unstructured, log logr.Log
 	return value
 }
 
-// constrainExtProcResponseBodyMode rejects NONE when response-body callbacks
-// are required (API translation and/or Output-phase guardrail checks).
+// ExtProcResponseBodyModeBuffered is the Envoy BodySendMode Praxis needs to
+// evaluate Output-phase AIGuardrail checks (StreamBuffer on the response path).
+const ExtProcResponseBodyModeBuffered = "BUFFERED"
+
+// constrainExtProcResponseBodyMode adjusts an resolved response body mode when
+// a stronger requirement applies:
+//   - Output-phase callouts force BUFFERED (not the STREAMED default): Praxis
+//     only runs Output guards on a buffered body. The tenant-wide default
+//     remains STREAMED; BUFFERED is applied only while those callouts remain
+//     after infra pinning. With apiTranslation enabled, Output checks are
+//     unsupported and should not reach this path.
+//   - NONE with apiTranslation falls back to DefaultExtProcResponseBodyMode
+//     (STREAMED) so Messages SSE translation still receives response chunks.
 func constrainExtProcResponseBodyMode(mode string, apiTranslation, needsResponseBody bool, log logr.Logger) string {
-	if mode != "NONE" {
-		return mode
-	}
-	if apiTranslation {
-		log.Info("Ignoring NONE ExtProc response body mode: API translation requires response body callbacks",
+	if needsResponseBody && mode != ExtProcResponseBodyModeBuffered {
+		log.Info("Forcing BUFFERED ExtProc response body mode: Output-phase guardrail checks require a buffered body",
 			"annotation", AnnotationExtProcResponseBodyMode,
-			"default", DefaultExtProcResponseBodyMode,
+			"requested", mode,
+			"effective", ExtProcResponseBodyModeBuffered,
 		)
-		return DefaultExtProcResponseBodyMode
+		return ExtProcResponseBodyModeBuffered
 	}
-	if needsResponseBody {
-		log.Info("Ignoring NONE ExtProc response body mode: the tenant has Output-phase guardrail checks",
+	if mode == "NONE" && apiTranslation {
+		log.Info("Ignoring NONE ExtProc response body mode: API translation requires response body callbacks",
 			"annotation", AnnotationExtProcResponseBodyMode,
 			"default", DefaultExtProcResponseBodyMode,
 		)

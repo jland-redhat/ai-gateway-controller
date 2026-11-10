@@ -652,9 +652,11 @@ func (r *Reconciler) reconcilePraxis(ctx context.Context, log logr.Logger, mtc *
 		log.Error(err, "guardrail catalog is incomplete; affected checks fail closed and the rest are published")
 	}
 	r.reportNemoOutsideInfra(ctx, log, tenantNamespace, infraNamespace, pinNemoCalloutsToInfra(callouts, infraNamespace))
-	// Output-phase checks need the response body. pinNemoCalloutsToInfra has
-	// already replaced out-of-infra Output checks with closed request-only
-	// stand-ins, so only remaining response hooks force STREAMED over NONE.
+	// Output-phase checks need a BUFFERED response body (Praxis StreamBuffer).
+	// pinNemoCalloutsToInfra has already replaced out-of-infra Output checks
+	// with closed request-only stand-ins, so only remaining response hooks
+	// force BUFFERED over the STREAMED default / annotation. The default stays
+	// STREAMED when no Output callouts remain.
 	if constrained := constrainExtProcResponseBodyMode(
 		extProcResponseBodyMode, false, calloutsNeedResponseBody(callouts), log,
 	); constrained != extProcResponseBodyMode {
