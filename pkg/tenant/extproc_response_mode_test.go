@@ -58,6 +58,44 @@ func TestResolveExtProcResponseBodyMode(t *testing.T) {
 	}
 }
 
+func TestConstrainExtProcResponseBodyMode(t *testing.T) {
+	cases := []struct {
+		name              string
+		mode              string
+		apiTranslation    bool
+		needsResponseBody bool
+		want              string
+	}{
+		{name: "streamed unchanged", mode: "STREAMED", want: "STREAMED"},
+		{name: "buffered unchanged", mode: "BUFFERED", want: "BUFFERED"},
+		{name: "none without constraints", mode: "NONE", want: "NONE"},
+		{name: "none with apiTranslation", mode: "NONE", apiTranslation: true, want: DefaultExtProcResponseBodyMode},
+		{name: "none with output callouts", mode: "NONE", needsResponseBody: true, want: DefaultExtProcResponseBodyMode},
+		{name: "none with both constraints", mode: "NONE", apiTranslation: true, needsResponseBody: true, want: DefaultExtProcResponseBodyMode},
+		{name: "streamed with constraints", mode: "STREAMED", apiTranslation: true, needsResponseBody: true, want: "STREAMED"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := constrainExtProcResponseBodyMode(tc.mode, tc.apiTranslation, tc.needsResponseBody, logr.Discard())
+			if got != tc.want {
+				t.Fatalf("constrainExtProcResponseBodyMode() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCalloutsNeedResponseBody(t *testing.T) {
+	if calloutsNeedResponseBody(nil) {
+		t.Fatal("empty callouts need response body")
+	}
+	if calloutsNeedResponseBody([]nemoCallout{{checks: []nemoCheck{{request: true}}}}) {
+		t.Fatal("request-only callouts need response body")
+	}
+	if !calloutsNeedResponseBody([]nemoCallout{{checks: []nemoCheck{{response: true}}}}) {
+		t.Fatal("output callouts do not need response body")
+	}
+}
+
 func TestConfigureSharedExtProcHonorsResponseBodyModeAnnotation(t *testing.T) {
 	tenantID := "redteam"
 	gatewayNamespace := "openshift-ingress"
@@ -85,4 +123,43 @@ func TestConfigureSharedExtProcHonorsResponseBodyModeAnnotation(t *testing.T) {
 			assertSharedResponseMode(t, resources[2], mode, false)
 		})
 	}
+}
+
+func TestConfigureSharedExtProcRejectsNoneWithAPITranslation(t *testing.T) {
+	tenantID := "redteam"
+	gatewayNamespace := "openshift-ingress"
+	resources := []unstructured.Unstructured{
+		{Object: map[string]any{
+			"apiVersion": "v1", "kind": "ConfigMap",
+			"metadata": map[string]any{"name": PayloadProcessingPluginsConfigMapForTenant(tenantID), "namespace": gatewayNamespace},
+			"data":     map[string]any{"extproc.yaml": "old"},
+		}},
+		{Object: map[string]any{
+			"apiVersion": "apps/v1", "kind": "Deployment",
+			"metadata": map[string]any{"name": PayloadProcessingDeploymentName(tenantID), "namespace": gatewayNamespace},
+			"spec": map[string]any{"template": map[string]any{
+				"metadata": map[string]any{"annotations": map[string]any{}},
+				"spec":     map[string]any{"containers": []any{map[string]any{"name": "payload-processing"}}},
+			}},
+		}},
+		sharedEnvoyFilterFixture(tenantID, gatewayNamespace),
+	}
+	mode := constrainExtProcResponseBodyMode("NONE", true, false, logr.Discard())
+	if err := configureSharedExtProc(resources, tenantID, gatewayNamespace, true, DefaultExtProcMaxBodyBytes, mode); err != nil {
+		t.Fatal(err)
+	}
+	assertSharedResponseMode(t, resources[2], DefaultExtProcResponseBodyMode, true)
+}
+
+func TestConfigureSharedExtProcRejectsNoneWithOutputCallouts(t *testing.T) {
+	tenantID := "redteam"
+	gatewayNamespace := "openshift-ingress"
+	resources := []unstructured.Unstructured{sharedEnvoyFilterFixture(tenantID, gatewayNamespace)}
+	mode := constrainExtProcResponseBodyMode("NONE", false, calloutsNeedResponseBody([]nemoCallout{
+		{checks: []nemoCheck{{name: "jail", response: true}}},
+	}), logr.Discard())
+	if err := configureSharedExtProcResponseMode(resources, tenantID, mode, false); err != nil {
+		t.Fatal(err)
+	}
+	assertSharedResponseMode(t, resources[0], DefaultExtProcResponseBodyMode, false)
 }

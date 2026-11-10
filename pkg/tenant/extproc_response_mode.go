@@ -31,6 +31,15 @@ var allowedExtProcResponseBodyModes = map[string]struct{}{
 	"BUFFERED": {},
 }
 
+// extProcResponseBodyModeAnnotation returns the raw annotation value used by
+// watch predicates so annotation-only flips enqueue a reconcile.
+func extProcResponseBodyModeAnnotation(mtc *unstructured.Unstructured) string {
+	if mtc == nil {
+		return ""
+	}
+	return mtc.GetAnnotations()[AnnotationExtProcResponseBodyMode]
+}
+
 // resolveExtProcResponseBodyMode reads AnnotationExtProcResponseBodyMode from
 // the MaasTenantConfig. Absent or invalid values fall back to
 // DefaultExtProcResponseBodyMode; invalid values also log a warning.
@@ -51,5 +60,47 @@ func resolveExtProcResponseBodyMode(mtc *unstructured.Unstructured, log logr.Log
 		)
 		return DefaultExtProcResponseBodyMode
 	}
+	if value != DefaultExtProcResponseBodyMode {
+		log.Info("Applying a non-default ExtProc response body mode",
+			"annotation", AnnotationExtProcResponseBodyMode,
+			"value", value,
+		)
+	}
 	return value
+}
+
+// constrainExtProcResponseBodyMode rejects NONE when response-body callbacks
+// are required (API translation and/or Output-phase guardrail checks).
+func constrainExtProcResponseBodyMode(mode string, apiTranslation, needsResponseBody bool, log logr.Logger) string {
+	if mode != "NONE" {
+		return mode
+	}
+	if apiTranslation {
+		log.Info("Ignoring NONE ExtProc response body mode: API translation requires response body callbacks",
+			"annotation", AnnotationExtProcResponseBodyMode,
+			"default", DefaultExtProcResponseBodyMode,
+		)
+		return DefaultExtProcResponseBodyMode
+	}
+	if needsResponseBody {
+		log.Info("Ignoring NONE ExtProc response body mode: the tenant has Output-phase guardrail checks",
+			"annotation", AnnotationExtProcResponseBodyMode,
+			"default", DefaultExtProcResponseBodyMode,
+		)
+		return DefaultExtProcResponseBodyMode
+	}
+	return mode
+}
+
+// calloutsNeedResponseBody reports whether any accepted callout still has an
+// Output-phase check after infra pinning (closed stand-ins are request-only).
+func calloutsNeedResponseBody(callouts []nemoCallout) bool {
+	for _, c := range callouts {
+		for _, check := range c.checks {
+			if check.response {
+				return true
+			}
+		}
+	}
+	return false
 }

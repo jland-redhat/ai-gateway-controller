@@ -393,7 +393,14 @@ ExtProc pod.
 
 The shared MaaS/KServe post-auth ExtProc keeps request buffering and streams
 response-body events so the opt-in Anthropic Messages translator can process
-progressive SSE. Translation filters remain absent when
+progressive SSE. The default shared `response_body_mode` is `STREAMED`. The
+experimental annotation
+`maas.opendatahub.io/experimental-extproc-response-body-mode` can select
+`STREAMED`, `BUFFERED`, or `NONE`; `NONE` is rejected when API translation is
+enabled (and when Output-phase guardrail callouts remain after infra pinning).
+The Kind shared-translation suite proves annotation-only flips reconcile
+without bumping `MaasTenantConfig` generation and that `NONE` stays constrained
+to `STREAMED` while translation is on. Translation filters remain absent when
 `MaasTenantConfig.spec.apiTranslation.enabled` is omitted or false; ordinary
 shared routes still traverse the ExtProc chain. The Kind qualification covers
 default-off passthrough and an unrelated OpenAI SSE route.
