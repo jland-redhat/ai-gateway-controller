@@ -100,9 +100,13 @@ func configureSharedExtProc(resources []unstructured.Unstructured, tenantID, gat
 // owned here and do not have a stable controller-provided route identity, so a
 // route-level override cannot be safely attached by this reconciler.
 func configureSharedExtProcResponseMode(resources []unstructured.Unstructured, tenantID string, apiTranslation bool) error {
-	want := "BUFFERED"
+	// Default NONE: the shared ipp chain has no response-body filters when
+	// apiTranslation is off (headers + request_id + stream_usage_inject only).
+	// BUFFERED holds the full upstream body and defeats SSE chat streaming.
+	want := "NONE"
 	var routeCacheAction string
 	if apiTranslation {
+		// Messages SSE translation needs progressive response body delivery.
 		want = "STREAMED"
 		routeCacheAction = "RETAIN"
 	}
@@ -166,12 +170,12 @@ func configureSharedExtProcResponseMode(resources []unstructured.Unstructured, t
 // Messages requests they translate.
 // This runtime render owns the effective static chain because it
 // replaces the vendored ConfigMap value during reconciliation. The tenant's
-// permission also selects the shared ipp response mode: BUFFERED by default
-// and STREAMED when translation is enabled so the Messages SSE filter can emit
-// progressive events. Retaining the route cache is also scoped to
-// translation-enabled tenants because only that shared path rewrites Messages
-// requests. The separate ipp-pre mode and ExternalModel processor are
-// unchanged.
+// permission also selects the shared ipp response mode: NONE by default
+// (request-only filters; SSE must pass through) and STREAMED when translation
+// is enabled so the Messages SSE filter can emit progressive events.
+// Retaining the route cache is also scoped to translation-enabled tenants
+// because only that shared path rewrites Messages requests. The separate
+// ipp-pre mode and ExternalModel processor are unchanged.
 //
 // apiTranslation enables the Anthropic Messages translation filters.
 // maxBodyBytes bounds stream_usage_inject (and related translation buffers).

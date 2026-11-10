@@ -161,8 +161,8 @@ func assertRenderedExtProcResource(t *testing.T, resource map[string]any) string
 		if routeCacheAction, found, err := unstructured.NestedString(resource, "typed_config", "route_cache_action"); err != nil || found {
 			t.Fatalf("tenant-independent shared filter must leave route_cache_action unset: value=%q found=%t err=%v", routeCacheAction, found, err)
 		}
-		if mode != "BUFFERED" || responseMode != "BUFFERED" {
-			t.Fatalf("rendered shared post-auth modes = request %q response %q, want main-compatible BUFFERED/BUFFERED defaults", mode, responseMode)
+		if mode != "BUFFERED" || responseMode != "NONE" {
+			t.Fatalf("rendered shared post-auth modes = request %q response %q, want BUFFERED/NONE defaults (SSE passthrough)", mode, responseMode)
 		}
 		return "post"
 	case "envoy.filters.http.ext_proc.external-model":

@@ -520,7 +520,7 @@ func TestConfigureSharedExtProcKeepsDefaultResponseModeWhenTranslationIsOff(t *t
 	if err := configureSharedExtProc(resources, tenantID, gatewayNamespace, false, DefaultExtProcMaxBodyBytes); err != nil {
 		t.Fatal(err)
 	}
-	assertSharedResponseMode(t, resources[2], "BUFFERED", false)
+	assertSharedResponseMode(t, resources[2], "NONE", false)
 }
 
 func TestTranslationSettingsToggleWithoutStaleRenderedState(t *testing.T) {
@@ -564,7 +564,7 @@ func TestTranslationSettingsToggleWithoutStaleRenderedState(t *testing.T) {
 		if err := configureExternalModelExtProc(resources, tenantID, "tenant-a", candidates, enabled, DefaultExtProcMaxBodyBytes); err != nil {
 			t.Fatalf("configure ExternalModel ExtProc with translation=%t: %v", enabled, err)
 		}
-		assertSharedResponseMode(t, resources[2], map[bool]string{true: "STREAMED", false: "BUFFERED"}[enabled], enabled)
+		assertSharedResponseMode(t, resources[2], map[bool]string{true: "STREAMED", false: "NONE"}[enabled], enabled)
 		sharedData, _, err := unstructured.NestedStringMap(resources[0].Object, "data")
 		if err != nil {
 			t.Fatal(err)
