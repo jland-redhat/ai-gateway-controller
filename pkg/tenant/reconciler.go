@@ -675,8 +675,9 @@ func (r *Reconciler) reconcilePraxis(ctx context.Context, log logr.Logger, mtc *
 		return ctrl.Result{}, fmt.Errorf("compile NeMo callouts: %w", err)
 	}
 	// Drop optional kinds whose CRD is absent, and released plugins ConfigMaps
-	// annotated opendatahub.io/managed=false, before ownership / apply.
-	resources, err = r.omitOptionalUnavailableResources(ctx, log, resources)
+	// annotated opendatahub.io/managed=false (unless force migration must
+	// overwrite an IPP leftover), before ownership / apply.
+	resources, err = r.omitOptionalUnavailableResources(ctx, log, mtc, resources)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -772,8 +773,9 @@ var optionalInstallGVKs = map[schema.GroupVersionKind]struct{}{
 //   - optional kinds whose API is not registered (missing CRD used to stall
 //     every ExtProc install via waitForForeignOwnership)
 //   - released plugins ConfigMaps annotated opendatahub.io/managed=false
-//     (local filter edits must survive the periodic resync)
-func (r *Reconciler) omitOptionalUnavailableResources(ctx context.Context, log logr.Logger, resources []unstructured.Unstructured) ([]unstructured.Unstructured, error) {
+//     (local filter edits must survive the periodic resync), except when
+//     force-payload-processing-migration must overwrite an IPP leftover
+func (r *Reconciler) omitOptionalUnavailableResources(ctx context.Context, log logr.Logger, mtc *unstructured.Unstructured, resources []unstructured.Unstructured) ([]unstructured.Unstructured, error) {
 	reader := r.APIReader
 	if reader == nil {
 		reader = r.Client
@@ -807,7 +809,7 @@ func (r *Reconciler) omitOptionalUnavailableResources(ctx context.Context, log l
 			out = append(out, resources[i])
 		}
 	}
-	return r.omitUnmanagedReleasedPluginConfigMaps(ctx, log, reader, out)
+	return r.omitUnmanagedReleasedPluginConfigMaps(ctx, log, reader, forcePayloadProcessingMigration(mtc), out)
 }
 
 func (r *Reconciler) resolvePraxisRuntimeCandidates(
@@ -1231,10 +1233,17 @@ func isReleasedPluginConfigMap(obj *unstructured.Unstructured) bool {
 // from the apply set when the live object carries
 // opendatahub.io/managed=false. Removing the annotation restores the rendered
 // content on the next reconcile. Missing ConfigMaps and other resources stay.
+//
+// Exception: when forceMigration is set and the live ConfigMap is still
+// IPP-shaped, keep it in the apply set so
+// AnnotationForcePayloadProcessingMigration can ForceOwnership-overwrite the
+// leftover (RHOAIENG-98846). Without this, the migration gate would pass and
+// Apply would silently skip the ConfigMap.
 func (r *Reconciler) omitUnmanagedReleasedPluginConfigMaps(
 	ctx context.Context,
 	log logr.Logger,
 	reader client.Reader,
+	forceMigration bool,
 	resources []unstructured.Unstructured,
 ) ([]unstructured.Unstructured, error) {
 	kept := make([]unstructured.Unstructured, 0, len(resources))
@@ -1256,6 +1265,19 @@ func (r *Reconciler) omitUnmanagedReleasedPluginConfigMaps(
 		if !isManagedFalse(current) {
 			kept = append(kept, resources[i])
 			continue
+		}
+		if forceMigration {
+			data, _, err := unstructured.NestedStringMap(current.Object, "data")
+			if err != nil {
+				return nil, fmt.Errorf("read data for %s %s/%s: %w", desired.GetKind(), desired.GetNamespace(), desired.GetName(), err)
+			}
+			if isIPPPluginsConfigMapData(data) {
+				log.Info("force-migrating managed=false IPP plugins ConfigMap",
+					"namespace", desired.GetNamespace(), "name", desired.GetName(),
+					"annotation", AnnotationForcePayloadProcessingMigration)
+				kept = append(kept, resources[i])
+				continue
+			}
 		}
 		log.Info("leaving plugins ConfigMap untouched",
 			"namespace", desired.GetNamespace(), "name", desired.GetName(), "annotation", AnnotationManaged)
