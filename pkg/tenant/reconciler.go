@@ -587,6 +587,11 @@ func (r *Reconciler) reconcilePraxis(ctx context.Context, log logr.Logger, mtc *
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("read authoritative MaaS apiTranslation setting: %w", err)
 	}
+	// Fail closed on an invalid CRD ceiling before the annotation/default
+	// fallback path used by configure/hash helpers.
+	if _, err := PayloadProcessingMaxBodyBytes(mtc); err != nil {
+		return ctrl.Result{}, fmt.Errorf("read authoritative MaaS payloadProcessing.maxBodyBytes: %w", err)
+	}
 	extProcMaxBodyBytes := resolveExtProcMaxBodyBytes(mtc, log)
 	extProcResponseBodyMode := constrainExtProcResponseBodyMode(
 		resolveExtProcResponseBodyMode(mtc, log), apiTranslation, false, log)

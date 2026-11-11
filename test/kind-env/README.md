@@ -434,7 +434,7 @@ this PR does not claim to restore that behavior.
 
 When translation is enabled, the selected-provider request filter retains
 main's 10 MiB request allowance (`extprocMaxBodyBytes`), independently of the
-1 MiB buffered Anthropic JSON response limit. OpenAI-compatible providers in
+1 MiB buffered Anthropic JSON response limit. Tenants may raise the ExtProc accumulation ceiling via `MaasTenantConfig.spec.payloadProcessing.maxBodyBytes` (default 10 MiB; this is ExtProc accumulation, not Envoy's HTTP buffer). OpenAI-compatible providers in
 the translation-enabled chain share the request limit. Rewritten output has
 64 KiB of bounded headroom above the input allowance in the server accumulator.
 Streaming Anthropic responses remain incremental.

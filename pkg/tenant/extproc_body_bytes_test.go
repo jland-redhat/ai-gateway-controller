@@ -58,6 +58,36 @@ func TestResolveExtProcMaxBodyBytes(t *testing.T) {
 	}
 }
 
+func TestResolveExtProcMaxBodyBytesPrefersAnnotationOverCRD(t *testing.T) {
+	t.Parallel()
+	mtc := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "maas.opendatahub.io/v1alpha1",
+		"kind":       "MaasTenantConfig",
+		"metadata": map[string]any{
+			"name":        "default-tenant",
+			"namespace":   "ns",
+			"annotations": map[string]any{AnnotationExtProcMaxBodyBytes: "2097152"},
+		},
+		"spec": map[string]any{"payloadProcessing": map[string]any{"maxBodyBytes": int64(20971520)}},
+	}}
+	if got := resolveExtProcMaxBodyBytes(mtc, logr.Discard()); got != 2097152 {
+		t.Fatalf("resolveExtProcMaxBodyBytes() = %d, want annotation 2097152", got)
+	}
+}
+
+func TestResolveExtProcMaxBodyBytesUsesCRDWhenAnnotationAbsent(t *testing.T) {
+	t.Parallel()
+	mtc := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "maas.opendatahub.io/v1alpha1",
+		"kind":       "MaasTenantConfig",
+		"metadata":   map[string]any{"name": "default-tenant", "namespace": "ns"},
+		"spec":       map[string]any{"payloadProcessing": map[string]any{"maxBodyBytes": int64(20971520)}},
+	}}
+	if got := resolveExtProcMaxBodyBytes(mtc, logr.Discard()); got != 20971520 {
+		t.Fatalf("resolveExtProcMaxBodyBytes() = %d, want CRD 20971520", got)
+	}
+}
+
 func TestConfigureExtProcMaxBodyBytes(t *testing.T) {
 	t.Parallel()
 	const oldBody = int64(33554432)

@@ -1887,15 +1887,22 @@ def wait_externalmodel_revision(expected_clusters, label, *, changed_from=None, 
             all(not any(field in candidate for field in provider_profile_fields)
                 for candidate in profile_candidates)
         )
-        body_limit_state_matches = "filter: stream_usage_inject" in snapshot["extproc_config"] and (
-            "max_request_body_bytes: 10485760" in snapshot["extproc_config"]
-            and "max_response_body_bytes: 1048576" in snapshot["extproc_config"]
-            and translation_stream_filter_present
-            if api_translation_enabled else
-            "max_request_body_bytes" not in snapshot["extproc_config"]
-            and "max_response_body_bytes" not in snapshot["extproc_config"]
-            and "allow_unbounded_body: true" in snapshot["extproc_config"]
-            and not translation_stream_filter_present
+        # Server accumulation is always bounded (default 10 MiB). Translation
+        # uses max_request_body_bytes / max_response_body_bytes on the filter;
+        # stream_usage_inject is always present.
+        body_limit_state_matches = (
+            "\n  max_body_bytes: 10485760\n" in snapshot["extproc_config"]
+            and "allow_unbounded_body: true" not in snapshot["extproc_config"]
+            and "filter: stream_usage_inject" in snapshot["extproc_config"]
+            and (
+                "max_request_body_bytes: 10485760" in snapshot["extproc_config"]
+                and "max_response_body_bytes: 1048576" in snapshot["extproc_config"]
+                and translation_stream_filter_present
+                if api_translation_enabled else
+                "max_request_body_bytes" not in snapshot["extproc_config"]
+                and "max_response_body_bytes" not in snapshot["extproc_config"]
+                and not translation_stream_filter_present
+            )
         )
         if (set(snapshot["demo_model_candidate_clusters"]) == set(expected_clusters)
                 and snapshot["published_digest"]
@@ -4754,10 +4761,10 @@ def test_externalmodel_provider_aware_translation(auth_file, gateway_auth_contex
            and "api_translation_enabled:" not in openai_off_runtime["extproc_config"]
            and "filter: openai_chat_completions_to_anthropic\n" not in openai_off_runtime["extproc_config"]
            and "openai_chat_completions_to_anthropic_stream" not in openai_off_runtime["extproc_config"]
-           and "\n  max_body_bytes:" not in openai_off_runtime["extproc_config"]
+           and "\n  max_body_bytes: 10485760\n" in openai_off_runtime["extproc_config"]
            and "max_request_body_bytes" not in openai_off_runtime["extproc_config"]
            and "max_response_body_bytes" not in openai_off_runtime["extproc_config"]
-           and "allow_unbounded_body: true" in openai_off_runtime["extproc_config"]
+           and "allow_unbounded_body: true" not in openai_off_runtime["extproc_config"]
            and all(not any(field in candidate for field in ("api_format", "path", "target_model"))
                    for candidate in openai_off_runtime["demo_model_candidates"]),
            {"http_status": openai_off_status, "provider_path": openai_off_observation.get("path"),

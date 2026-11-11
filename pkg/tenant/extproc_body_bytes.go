@@ -39,34 +39,44 @@ var serverMaxBodyBytesLine = regexp.MustCompile(`(?m)^(  max_body_bytes: )\d+\s*
 var pluginConfigMapBodyBytesKeys = []string{"pre-extproc.yaml"}
 
 // ExtProcMaxBodyBytesFor returns the effective ExtProc server body budget for
-// mtc (annotation or DefaultExtProcMaxBodyBytes). Exported so withdrawal hash
-// checks use the same budget the tenant reconciler rendered.
+// mtc (experimental annotation, else spec.payloadProcessing.maxBodyBytes, else
+// DefaultExtProcMaxBodyBytes). Exported so withdrawal hash checks use the same
+// budget the tenant reconciler rendered.
 func ExtProcMaxBodyBytesFor(mtc *unstructured.Unstructured) int64 {
 	return resolveExtProcMaxBodyBytes(mtc, logr.Discard())
 }
 
-// resolveExtProcMaxBodyBytes reads AnnotationExtProcMaxBodyBytes from the
-// MaasTenantConfig. Absent or invalid values fall back to
-// DefaultExtProcMaxBodyBytes; invalid values also log a warning.
+// resolveExtProcMaxBodyBytes resolves the ExtProc server body budget.
+// AnnotationExtProcMaxBodyBytes wins when present and valid (experimental
+// override). Otherwise spec.payloadProcessing.maxBodyBytes is used; omission
+// defaults to DefaultExtProcMaxBodyBytes. Invalid annotation values log and
+// fall through to the CRD/default path; invalid CRD values also fall back
+// here (reconcile fail-closes separately via PayloadProcessingMaxBodyBytes).
 func resolveExtProcMaxBodyBytes(mtc *unstructured.Unstructured, log logr.Logger) int64 {
 	if mtc == nil {
 		return DefaultExtProcMaxBodyBytes
 	}
-	raw, ok := mtc.GetAnnotations()[AnnotationExtProcMaxBodyBytes]
-	if !ok || strings.TrimSpace(raw) == "" {
-		return DefaultExtProcMaxBodyBytes
-	}
-	value, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
-	if err != nil || value < 1 || value > MaxExtProcMaxBodyBytes {
-		log.Info("Ignoring invalid ExtProc max body bytes annotation; using default",
+	if raw, ok := mtc.GetAnnotations()[AnnotationExtProcMaxBodyBytes]; ok && strings.TrimSpace(raw) != "" {
+		value, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+		if err == nil && value >= 1 && value <= MaxExtProcMaxBodyBytes {
+			return value
+		}
+		log.Info("Ignoring invalid ExtProc max body bytes annotation; using CRD/default",
 			"annotation", AnnotationExtProcMaxBodyBytes,
 			"value", raw,
 			"default", DefaultExtProcMaxBodyBytes,
 			"max", MaxExtProcMaxBodyBytes,
 		)
+	}
+	n, err := PayloadProcessingMaxBodyBytes(mtc)
+	if err != nil {
+		log.Info("Ignoring invalid ExtProc max body bytes CRD field; using default",
+			"error", err.Error(),
+			"default", DefaultExtProcMaxBodyBytes,
+		)
 		return DefaultExtProcMaxBodyBytes
 	}
-	return value
+	return n
 }
 
 // configureExtProcMaxBodyBytes rewrites server-scoped max_body_bytes in owned

@@ -104,6 +104,59 @@ func OutputChecksUnsupported(ctx context.Context, reader client.Reader, namespac
 		"Praxis release does not check; use Input-phase checks only, or disable API translation", nil
 }
 
+// PayloadProcessingMaxBodyBytes reads the ExtProc accumulation ceiling from
+// MaasTenantConfig.spec.payloadProcessing.maxBodyBytes. Omission defaults to
+// DefaultExtProcMaxBodyBytes. Malformed, non-positive, or above
+// MaxExtProcMaxBodyBytes values fail closed. The experimental annotation
+// AnnotationExtProcMaxBodyBytes may still override this at reconcile time.
+func PayloadProcessingMaxBodyBytes(mtc *unstructured.Unstructured) (int64, error) {
+	if mtc == nil {
+		return 0, errors.New("MaasTenantConfig is required to read payloadProcessing.maxBodyBytes")
+	}
+	value, found, err := unstructured.NestedFieldNoCopy(mtc.Object, "spec", "payloadProcessing", "maxBodyBytes")
+	if err != nil {
+		return 0, fmt.Errorf("read spec.payloadProcessing.maxBodyBytes: %w", err)
+	}
+	if !found {
+		return DefaultExtProcMaxBodyBytes, nil
+	}
+	n, ok := asPositiveInt64(value)
+	if !ok {
+		return 0, fmt.Errorf("spec.payloadProcessing.maxBodyBytes must be an integer >= 1, got %T (%v)", value, value)
+	}
+	if n > MaxExtProcMaxBodyBytes {
+		return 0, fmt.Errorf("spec.payloadProcessing.maxBodyBytes must be <= %d, got %d", MaxExtProcMaxBodyBytes, n)
+	}
+	return n, nil
+}
+
+func asPositiveInt64(value any) (int64, bool) {
+	switch n := value.(type) {
+	case int64:
+		if n < 1 {
+			return 0, false
+		}
+		return n, true
+	case int32:
+		if n < 1 {
+			return 0, false
+		}
+		return int64(n), true
+	case int:
+		if n < 1 {
+			return 0, false
+		}
+		return int64(n), true
+	case float64:
+		if n < 1 || n != float64(int64(n)) {
+			return 0, false
+		}
+		return int64(n), true
+	default:
+		return 0, false
+	}
+}
+
 // IdentifierFor derives the per-tenant resource-naming identifier from
 // a MaasTenantConfig's labels, mirroring maas-controller's
 // tenantreconcile.TenantIdentifierFor: the default/legacy tenant (unlabeled,

@@ -396,7 +396,7 @@ func TestSharedExtProcConfigUsesRegisteredOrderedMessagesFilters(t *testing.T) {
 	for _, want := range []string{
 		"on_invalid: reject",
 		"path: \"/v1/messages\"",
-		"max_body_bytes: 1048576",
+		"max_body_bytes: 1048576\n",
 		"max_partial_event_bytes: 10485760",
 		"content-type: \"text/event-stream\"",
 		"pattern: \"^/v1/messages$\"",
@@ -750,5 +750,17 @@ func assertSharedResponseMode(t *testing.T, filter unstructured.Unstructured, wa
 	}
 	if ipp != 4 || ippPre != 4 {
 		t.Errorf("shared mode patches = ipp:%d ipp-pre:%d, want 4 each", ipp, ippPre)
+	}
+}
+
+func TestExtProcConfigsHonorMaxBodyBytesOverride(t *testing.T) {
+	const override int64 = 20971520
+	shared := sharedExtProcConfig(false, override)
+	if !strings.Contains(shared, "max_body_bytes: 20971520") || strings.Contains(shared, "allow_unbounded_body: true") {
+		t.Fatalf("shared override missing:\n%s", shared)
+	}
+	post := extprocPostAuthConfig([]envelope.Candidate{{Cluster: "provider-openai"}}, nil, false, override)
+	if !strings.Contains(post, "max_body_bytes: 20971520") || strings.Contains(post, "allow_unbounded_body: true") {
+		t.Fatalf("post-auth override missing:\n%s", post)
 	}
 }
