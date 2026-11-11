@@ -674,9 +674,8 @@ func (r *Reconciler) reconcilePraxis(ctx context.Context, log logr.Logger, mtc *
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("compile NeMo callouts: %w", err)
 	}
-	// ServiceMonitor (and similar scrape CRs) are optional: clusters without
-	// prometheus-operator must still get ExtProc. Drop those kinds before the
-	// ownership gate / apply so a missing CRD cannot stall the whole install.
+	// Drop optional kinds whose CRD is absent, and released plugins ConfigMaps
+	// annotated opendatahub.io/managed=false, before ownership / apply.
 	resources, err = r.omitOptionalUnavailableResources(ctx, log, resources)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -768,10 +767,12 @@ var optionalInstallGVKs = map[schema.GroupVersionKind]struct{}{
 	gvkServiceMonitor: {},
 }
 
-// omitOptionalUnavailableResources drops optional kinds whose API is not
-// registered on the cluster. A missing CRD returns NoMatch from Get, which
-// waitForForeignOwnership previously treated as a soft handoff wait and
-// stalled every ExtProc install.
+// omitOptionalUnavailableResources drops resources that must not reach
+// ownership / apply:
+//   - optional kinds whose API is not registered (missing CRD used to stall
+//     every ExtProc install via waitForForeignOwnership)
+//   - released plugins ConfigMaps annotated opendatahub.io/managed=false
+//     (local filter edits must survive the periodic resync)
 func (r *Reconciler) omitOptionalUnavailableResources(ctx context.Context, log logr.Logger, resources []unstructured.Unstructured) ([]unstructured.Unstructured, error) {
 	reader := r.APIReader
 	if reader == nil {
@@ -806,7 +807,7 @@ func (r *Reconciler) omitOptionalUnavailableResources(ctx context.Context, log l
 			out = append(out, resources[i])
 		}
 	}
-	return out, nil
+	return r.omitUnmanagedReleasedPluginConfigMaps(ctx, log, reader, out)
 }
 
 func (r *Reconciler) resolvePraxisRuntimeCandidates(
@@ -1211,7 +1212,7 @@ func (r *Reconciler) waitForForeignOwnership(ctx context.Context, resources []un
 			}
 			return fmt.Errorf("inspect %s %s/%s: %w", desired.GetKind(), desired.GetNamespace(), desired.GetName(), err)
 		}
-		if isReleasedPluginConfigMap(desired) && current.GetAnnotations()["opendatahub.io/managed"] == "false" {
+		if isReleasedPluginConfigMap(desired) && isManagedFalse(current) {
 			continue
 		}
 		if current.GetLabels()[managedByLabel] != render.FieldOwner {
@@ -1224,6 +1225,42 @@ func (r *Reconciler) waitForForeignOwnership(ctx context.Context, resources []un
 func isReleasedPluginConfigMap(obj *unstructured.Unstructured) bool {
 	name := obj.GetName()
 	return name == PayloadProcessingPluginsConfigMapName || strings.HasPrefix(name, PayloadProcessingPluginsConfigMapName+"-")
+}
+
+// omitUnmanagedReleasedPluginConfigMaps drops a released plugins ConfigMap
+// from the apply set when the live object carries
+// opendatahub.io/managed=false. Removing the annotation restores the rendered
+// content on the next reconcile. Missing ConfigMaps and other resources stay.
+func (r *Reconciler) omitUnmanagedReleasedPluginConfigMaps(
+	ctx context.Context,
+	log logr.Logger,
+	reader client.Reader,
+	resources []unstructured.Unstructured,
+) ([]unstructured.Unstructured, error) {
+	kept := make([]unstructured.Unstructured, 0, len(resources))
+	for i := range resources {
+		desired := &resources[i]
+		if !isReleasedPluginConfigMap(desired) {
+			kept = append(kept, resources[i])
+			continue
+		}
+		current := &unstructured.Unstructured{}
+		current.SetGroupVersionKind(desired.GroupVersionKind())
+		if err := reader.Get(ctx, client.ObjectKeyFromObject(desired), current); err != nil {
+			if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) {
+				kept = append(kept, resources[i])
+				continue
+			}
+			return nil, fmt.Errorf("inspect %s %s/%s: %w", desired.GetKind(), desired.GetNamespace(), desired.GetName(), err)
+		}
+		if !isManagedFalse(current) {
+			kept = append(kept, resources[i])
+			continue
+		}
+		log.Info("leaving plugins ConfigMap untouched",
+			"namespace", desired.GetNamespace(), "name", desired.GetName(), "annotation", AnnotationManaged)
+	}
+	return kept, nil
 }
 
 // reconcileNotPraxis handles a tenant that currently does not opt into
