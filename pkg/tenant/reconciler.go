@@ -627,6 +627,19 @@ func (r *Reconciler) reconcilePraxis(ctx context.Context, log logr.Logger, mtc *
 	if err := configureExtProcBodyLimits(resources, extProcMaxBodyBytes); err != nil {
 		return ctrl.Result{}, err
 	}
+	if TenantUsesPPE(mtc) {
+		// POC: embed the Praxis Policy Engine in the pre-auth chain
+		// (docs/proposals/praxis-policy-engine-adoption.md). maas-api's
+		// in-cluster validate endpoint lives in the tenant's infrastructure
+		// namespace; its service CA is not in the policy filter's trust
+		// store, so the POC uses the plain-http service port.
+		maasAPIHost := "maas-api." + infraNamespace + ".svc.cluster.local"
+		maasAPIURL := "http://" + maasAPIHost + ":8080/internal/v1/api-keys/validate"
+		log.Info("policy-engine=ppe: injecting Praxis Policy Engine into the pre-auth chain", "maasAPIURL", maasAPIURL)
+		if err := configureExtProcPolicyEngine(resources, maasAPIURL, maasAPIHost, tenantID); err != nil {
+			return ctrl.Result{}, fmt.Errorf("configure PPE policy engine: %w", err)
+		}
+	}
 	resources = omitNetworkPolicies(resources, r.SkipNetworkPolicy, log, gatewayNamespace)
 	scaling := resolveIPPScaling(mtc, log)
 	if err := configureIPPScaling(log, &resources, tenantID, gatewayNamespace, scaling); err != nil {

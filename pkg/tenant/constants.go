@@ -183,6 +183,18 @@ const (
 	// IPP (mirrors maas-controller's tenantreconcile.PayloadProcessingTypeIPP).
 	PayloadProcessingBackendIPP = "ipp"
 
+	// AnnotationPolicyEngine selects a tenant's authn/authz/rate-limit
+	// policy engine. Lives on MaasTenantConfig. Default (absent or "rhcl")
+	// keeps the RHCL Kuadrant stack (Authorino + Limitador wasm) that
+	// maas-controller renders. Set to PolicyEnginePPE to run the embedded
+	// Praxis Policy Engine in the pre-auth ExtProc chain instead (POC; see
+	// docs/proposals/praxis-policy-engine-adoption.md).
+	AnnotationPolicyEngine = "maas.opendatahub.io/policy-engine"
+
+	// PolicyEnginePPE is the AnnotationPolicyEngine value that opts a tenant
+	// into the Praxis Policy Engine dataplane.
+	PolicyEnginePPE = "ppe"
+
 	// AITenantPhaseActive is the AITenant status.phase value maas-controller's
 	// AITenant reconciler sets only after it has validated the tenant's
 	// Gateway, and created its namespace, MaasTenantConfig, and RBAC.
