@@ -107,7 +107,13 @@ func configureExtProcPolicyEngine(resources []unstructured.Unstructured, maasAPI
 			continue
 		}
 		if strings.Contains(pre, "filter: policy") {
-			// Already injected (idempotent re-reconcile).
+			// Already injected (idempotent re-reconcile): still rewrite the
+			// policy document so annotation/render changes propagate.
+			data[PPDPolicyConfigMapKey] = ppePolicyDocument(maasAPIURL, tenantID)
+			if err := unstructured.SetNestedStringMap(cm.Object, data, "data"); err != nil {
+				return fmt.Errorf("ConfigMap %s/%s: write data: %w", cm.GetNamespace(), cm.GetName(), err)
+			}
+			patched++
 			continue
 		}
 		data["pre-extproc.yaml"] = pre + fmt.Sprintf(preAuthPolicyFilterYAML, maasAPIHost)
