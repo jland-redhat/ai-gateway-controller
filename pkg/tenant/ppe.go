@@ -17,6 +17,8 @@ limitations under the License.
 package tenant
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -122,6 +124,23 @@ func configureExtProcPolicyEngine(resources []unstructured.Unstructured, maasAPI
 	}
 	if patched == 0 {
 		return fmt.Errorf("no plugin ConfigMap pre-extproc.yaml found to inject the policy filter for tenant %s", tenantID)
+	}
+	// The pre-auth chain loads its config once at startup, so a ConfigMap
+	// change needs a pod roll. Stamp the pre chain's hash on the pre
+	// Deployment's pod template (the shared post chain has the same
+	// mechanism in configureSharedExtProc).
+	preDeploy := PayloadPreProcessingDeploymentName(tenantID)
+	configHash := sha256.Sum256([]byte(ppePolicyDocument(maasAPIURL, tenantID)))
+	for i := range resources {
+		deploy := &resources[i]
+		if deploy.GetKind() != "Deployment" || deploy.GetName() != preDeploy {
+			continue
+		}
+		if err := unstructured.SetNestedField(deploy.Object, hex.EncodeToString(configHash[:]),
+			"spec", "template", "metadata", "annotations", extprocConfigHashAnnotation); err != nil {
+			return fmt.Errorf("Deployment %s/%s: write PPE config hash: %w", deploy.GetNamespace(), deploy.GetName(), err)
+		}
+		break
 	}
 	return nil
 }
