@@ -281,6 +281,12 @@ func mergePraxisChains(pre, post string) (string, []interface{}, error) {
 	if err := unstructured.SetNestedSlice(first, append(preFilters, postFilters...), "filters"); err != nil {
 		return "", nil, fmt.Errorf("write merged filters: %w", err)
 	}
+	// NestedSlice returns a copy: write the modified chain back through the
+	// parent document, or the merge silently vanishes at marshal time.
+	newChains := append([]interface{}{first}, postChains[1:]...)
+	if err := unstructured.SetNestedSlice(postDoc, newChains, "filter_chains"); err != nil {
+		return "", nil, fmt.Errorf("write merged chains: %w", err)
+	}
 	// praxis 0.8.0 compatibility (see patchPreChainForPraxis08): the merged
 	// chain carries the policy filter, so the server needs the unbounded-body
 	// opt-in clamped to its cap.
