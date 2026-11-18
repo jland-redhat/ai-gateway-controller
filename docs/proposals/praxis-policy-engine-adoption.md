@@ -487,6 +487,92 @@ inference, 401 without token, 429 after ~4 requests) plus
 expectations: 401/403/429 semantics and `x-maas-*` headers match the
 rhcl tenant.
 
+### POC results: what does NOT work, and why (honest ledger)
+
+The validation flow passes, but only because of deliberate carve-outs.
+Everything below is **not enforced by PPE** in the POC. Each entry says
+why and links upstream tracking where it exists.
+
+1. **MaaSAuthPolicy (model access control) is not enforced by PPE at
+   all.** The PPE document only does `require(authenticated)` on
+   inference paths — no per-model, per-user access rules. Enforcement
+   still happens through the legacy path: maas-controller renders
+   MaaSAuthPolicy into Kuadrant AuthPolicies and the RHCL wasm (left in
+   the chain, shadow mode) enforces it. Translating MaaSAuthPolicy
+   semantics into PPE policy is the deferred renderer/transpiler work
+   (gap 6 above). Upstream: the AuthPolicy-capability epics
+   [#100](https://github.com/praxis-proxy/policy/issues/100) and
+   [#195](https://github.com/praxis-proxy/policy/issues/195); the
+   `authpolicy-transpiler` exists only in praxis-proxy/demos.
+2. **MaaSSubscription feeds nothing in PPE.** Two touchpoints, neither
+   in the policy: key minting binds a key to a subscription inside
+   maas-api's DB, and `GET /v1/models` scoping is maas-api itself.
+   Entitlement checks in PPE (can this subject use this model/quota?)
+   are absent. Upstream: the external-metadata PIP work is the
+   enabling surface — spike closed
+   ([#215](https://github.com/praxis-proxy/policy/issues/215)),
+   implementation epic
+   [#184](https://github.com/praxis-proxy/policy/issues/184) with the
+   `metadata-http` issue series
+   [#246](https://github.com/praxis-proxy/policy/issues/246)–[#261](https://github.com/praxis-proxy/policy/issues/261).
+3. **The rate limit is per-user, not per-subscription — a deviation
+   from the RHCL stack.** The original binding
+   (`subscription: claim.subscription`, reading the subscription field
+   of maas-api's validate response) failed with
+   `ratelimit.missing_attribute`: unconsumed api-key record fields do
+   not surface as `claim.*` attributes for limitador bindings. Rekeyed
+   to `subject.id`. RHCL Limitador descriptors key on the subscription
+   (all keys and owners of one subscription share a counter); the POC's
+   PPE counter is per-user. No upstream issue yet — the
+   record-claims-to-binding attribute gap needs one.
+4. **Request rate limiting only — NO token rate limiting.** The POC's
+   429 is a windowed request counter (`ratelimit/limitador`,
+   experimental). The product's token budgets (Kuadrant
+   TokenRateLimitPolicy, per-model token metering) have **no PPE
+   equivalent in the POC**: per-model keying needs header matching on
+   `http:` routes (MAJOR GAP 2, no upstream issue) and the token-quota
+   path is the experimental `quota` plugin. Upstream:
+   [#308](https://github.com/praxis-proxy/policy/issues/308) (graduate
+   ratelimit/limitador for token-based limiting),
+   [#200](https://github.com/praxis-proxy/policy/issues/200) (Kuadrant
+   TRLP → Praxis TRL gap investigation),
+   [#336](https://github.com/praxis-proxy/policy/issues/336)
+   (reservation-based admission), and the tokenomics enhancement
+   proposal 00121 in praxis-proxy/enhancements.
+5. **Counters are per-replica** (MAJOR GAP 3): single-replica gateway
+   required; multi-replica would over-admit. Upstream: #127 / #203 /
+   #143 as tracked in MAJOR GAPS.
+6. **TokenReview missing** (MAJOR GAP 1): SA-token inference auth
+   impossible on PPE. Upstream: #213.
+7. **OIDC/JWT path never exercised**: the flow uses API keys only; the
+   audience-optionality migration risk (MAJOR GAP 4) is untested.
+   No upstream issue.
+8. **RHCL still runs in shadow.** Both engines enforce; a PPE-only run
+   requires deleting the tenant's Kuadrant AuthPolicy/RateLimitPolicy
+   CRs after scaling maas-controller to 0 (POC-only; it recreates them).
+   The 401/403/429 outcomes observed are produced by PPE (its deny
+   reasons surface), but model-access 403s in shadow mode could come
+   from either engine.
+9. **praxis 0.8.0 compatibility shims live in our render path**: the
+   vendored BBR chain fails 0.8 validation without an explicit
+   `max_body_bytes` on the llmisvc resolver, and the policy filter's
+   nested pipeline trips the unbounded-StreamBuffer check unless
+   `insecure_options.allow_unbounded_body` is set (clamped to the
+   server cap). Both are patchable upstream; no issues filed. Related:
+   the policy filter warns it builds without the runtime's sub-request
+   connector and uses a second connection pool — also unfiled.
+10. **FIPS builds cannot carry the policy filter at all** (pure-Rust
+    crypto in PPE's plugins): the product image excludes
+    `policy-engine` by design. A FIPS-compatible PPE build is a
+    productization blocker with no upstream issue yet.
+11. **`x-maas-*` upstream headers are not injected by PPE.** The
+    post-auth header guard strips caller-supplied `x-maas-*`, but the
+    identity → header injection PPE would need (assertions →
+    x-maas-username, x-maas-subscription, …) is not rendered in the
+    POC policy; today those headers come from the RHCL wasm in shadow
+    mode. PPE's `assertions:` block supports it; the renderer work is
+    the same deferred item as #1.
+
 ### Repos touched
 
 - **ai-gateway-controller** (branch `early-praxis-policy-engine-ppe`):
