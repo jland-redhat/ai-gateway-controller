@@ -88,7 +88,7 @@ func TenantUsesPPE(mtc *unstructured.Unstructured) bool {
 // (https://maas-api.<ns>.svc:8443/internal/v1/api-keys/validate);
 // maasAPIHost is its URL host, allow-listed for the policy filter's private
 // endpoint restriction.
-func configureExtProcPolicyEngine(resources []unstructured.Unstructured, maasAPIURL, maasAPIHost, tenantID string) error {
+func configureExtProcPolicyEngine(resources []unstructured.Unstructured, maasAPIURL, maasAPIHost, tenantID string, maxBodyBytes int64) error {
 	patched := 0
 	for i := range resources {
 		cm := &resources[i]
@@ -106,17 +106,16 @@ func configureExtProcPolicyEngine(resources []unstructured.Unstructured, maasAPI
 		if !ok {
 			continue
 		}
-		if strings.Contains(pre, "filter: policy") {
-			// Already injected (idempotent re-reconcile): still rewrite the
-			// policy document so annotation/render changes propagate.
-			data[PPDPolicyConfigMapKey] = ppePolicyDocument(maasAPIURL, tenantID)
-			if err := unstructured.SetNestedStringMap(cm.Object, data, "data"); err != nil {
-				return fmt.Errorf("ConfigMap %s/%s: write data: %w", cm.GetNamespace(), cm.GetName(), err)
-			}
-			patched++
-			continue
+		// praxis 0.8.0 compatibility: the BBR chain's llmisvc resolver now
+		// requires an explicit per-filter body bound, and the policy filter's
+		// nested pipeline trips the unbounded-StreamBuffer check unless
+		// allow_unbounded_body opts in (it then clamps to the server cap,
+		// which the pre chain keeps at maxBodyBytes).
+		pre, changed := patchPreChainForPraxis08(pre, maxBodyBytes)
+		if changed || !strings.Contains(pre, "filter: policy") {
+			pre += fmt.Sprintf(preAuthPolicyFilterYAML, maasAPIHost)
 		}
-		data["pre-extproc.yaml"] = pre + fmt.Sprintf(preAuthPolicyFilterYAML, maasAPIHost)
+		data["pre-extproc.yaml"] = pre
 		data[PPDPolicyConfigMapKey] = ppePolicyDocument(maasAPIURL, tenantID)
 		if err := unstructured.SetNestedStringMap(cm.Object, data, "data"); err != nil {
 			return fmt.Errorf("ConfigMap %s/%s: write data: %w", cm.GetNamespace(), cm.GetName(), err)
@@ -127,6 +126,26 @@ func configureExtProcPolicyEngine(resources []unstructured.Unstructured, maasAPI
 		return fmt.Errorf("no plugin ConfigMap pre-extproc.yaml found to inject the policy filter for tenant %s", tenantID)
 	}
 	return nil
+}
+
+// patchPreChainForPraxis08 adapts the vendored pre-auth chain to praxis
+// 0.8.0's stricter pipeline validation: an explicit max_body_bytes on the
+// llmisvc resolver and server-level allow_unbounded_body (clamped to the
+// server max_body_bytes cap). Returns the patched YAML and whether anything
+// changed.
+func patchPreChainForPraxis08(pre string, maxBodyBytes int64) (string, bool) {
+	changed := false
+	resolver := "      - filter: llmisvc_model_provider_resolver\n"
+	if strings.Contains(pre, resolver) && !strings.Contains(pre, resolver+"        max_body_bytes:") {
+		pre = strings.Replace(pre, resolver,
+			fmt.Sprintf("%s        max_body_bytes: %d\n", resolver, maxBodyBytes), 1)
+		changed = true
+	}
+	if !strings.Contains(pre, "allow_unbounded_body") {
+		pre += fmt.Sprintf("\ninsecure_options:\n  # praxis 0.8.0: the policy filter's nested pipeline trips the\n  # unbounded-StreamBuffer check; allow and clamp to the server cap.\n  allow_unbounded_body: true\n")
+		changed = true
+	}
+	return pre, changed
 }
 
 // ppePolicyDocument renders the POC PPE policy document. Shape follows the

@@ -52,7 +52,7 @@ func TestConfigureExtProcPolicyEngine(t *testing.T) {
 		},
 	}}
 	resources := []unstructured.Unstructured{*cm}
-	if err := configureExtProcPolicyEngine(resources, "http://maas-api.infra.svc.cluster.local:8080/internal/v1/api-keys/validate", "maas-api.infra.svc.cluster.local", "t1"); err != nil {
+	if err := configureExtProcPolicyEngine(resources, "http://maas-api.infra.svc.cluster.local:8080/internal/v1/api-keys/validate", "maas-api.infra.svc.cluster.local", "t1", 10485760); err != nil {
 		t.Fatalf("configureExtProcPolicyEngine: %v", err)
 	}
 	data, _, err := unstructured.NestedStringMap(resources[0].Object, "data")
@@ -83,7 +83,7 @@ func TestConfigureExtProcPolicyEngine(t *testing.T) {
 		}
 	}
 	// Idempotent: a second pass must not duplicate the filter.
-	if err := configureExtProcPolicyEngine(resources, "http://maas-api.infra.svc.cluster.local:8080/internal/v1/api-keys/validate", "maas-api.infra.svc.cluster.local", "t1"); err != nil {
+	if err := configureExtProcPolicyEngine(resources, "http://maas-api.infra.svc.cluster.local:8080/internal/v1/api-keys/validate", "maas-api.infra.svc.cluster.local", "t1", 10485760); err != nil {
 		t.Fatalf("second pass: %v", err)
 	}
 	data, _, _ = unstructured.NestedStringMap(resources[0].Object, "data")
