@@ -182,6 +182,21 @@ func collapsePreIntoPost(resources []unstructured.Unstructured, tenantID string)
 		if err := unstructured.SetNestedStringMap(cm.Object, data, "data"); err != nil {
 			return nil, fmt.Errorf("ConfigMap %s/%s: write merged chain: %w", cm.GetNamespace(), cm.GetName(), err)
 		}
+		// Re-stamp the surviving Deployment: configureSharedExtProc hashed
+		// the pre-merge extproc.yaml, so without this the merged chain never
+		// rolls the pod.
+		mergedHash := sha256.Sum256([]byte(merged))
+		for j := range resources {
+			deploy := &resources[j]
+			if deploy.GetKind() != "Deployment" || deploy.GetName() != PayloadProcessingDeploymentName(tenantID) {
+				continue
+			}
+			if err := unstructured.SetNestedField(deploy.Object, hex.EncodeToString(mergedHash[:]),
+				"spec", "template", "metadata", "annotations", extprocConfigHashAnnotation); err != nil {
+				return nil, fmt.Errorf("Deployment %s/%s: write merged config hash: %w", deploy.GetNamespace(), deploy.GetName(), err)
+			}
+			break
+		}
 	}
 	if preFilters == nil {
 		return nil, fmt.Errorf("no plugin ConfigMap chain pair found to collapse for tenant %s", tenantID)
