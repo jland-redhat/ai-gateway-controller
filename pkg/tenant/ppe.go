@@ -195,6 +195,9 @@ func collapsePreIntoPost(resources []unstructured.Unstructured, tenantID string)
 				"spec", "template", "metadata", "annotations", extprocConfigHashAnnotation); err != nil {
 				return nil, fmt.Errorf("Deployment %s/%s: write merged config hash: %w", deploy.GetNamespace(), deploy.GetName(), err)
 			}
+			if err := mountServiceCA(deploy); err != nil {
+				return nil, fmt.Errorf("Deployment %s/%s: mount service CA: %w", deploy.GetNamespace(), deploy.GetName(), err)
+			}
 			break
 		}
 	}
@@ -519,4 +522,78 @@ func ppePolicyDocument(maasAPIURL, tenantID string) string {
 	b.WriteString("      pre_invocation:\n")
 	b.WriteString("        - \"require(authenticated)\"\n")
 	return b.String()
+}
+
+// mountServiceCA gives the merged-chain Deployment the cluster service CA
+// and points the subrequest transport's root store at it (rustls-native-certs
+// honors SSL_CERT_FILE). PPE's api-key directory calls maas-api over HTTPS
+// with a service-CA-signed cert, which is not in the default trust store.
+// The service-ca-bundle ConfigMap is provisioned by the service CA operator
+// in every namespace it is requested in; openshift-ingress carries one.
+func mountServiceCA(deploy *unstructured.Unstructured) error {
+	volumes, _, err := unstructured.NestedSlice(deploy.Object, "spec", "template", "spec", "volumes")
+	if err != nil {
+		return err
+	}
+	hasVol := false
+	for _, v := range volumes {
+		if vm, ok := v.(map[string]interface{}); ok {
+			if name, _, _ := unstructured.NestedString(vm, "name"); name == "ppe-service-ca" {
+				hasVol = true
+			}
+		}
+	}
+	if !hasVol {
+		volumes = append(volumes, map[string]interface{}{
+			"name": "ppe-service-ca",
+			"configMap": map[string]interface{}{
+				"name": "service-ca-bundle",
+			},
+		})
+		if err := unstructured.SetNestedSlice(deploy.Object, volumes, "spec", "template", "spec", "volumes"); err != nil {
+			return err
+		}
+	}
+	mounts, _, err := unstructured.NestedSlice(deploy.Object, "spec", "template", "spec", "containers", "0", "volumeMounts")
+	if err != nil {
+		return err
+	}
+	hasMount := false
+	for _, m := range mounts {
+		if mm, ok := m.(map[string]interface{}); ok {
+			if name, _, _ := unstructured.NestedString(mm, "name"); name == "ppe-service-ca" {
+				hasMount = true
+			}
+		}
+	}
+	if !hasMount {
+		mounts = append(mounts, map[string]interface{}{
+			"name":      "ppe-service-ca",
+			"mountPath": "/etc/ppe-ca",
+			"readOnly":  true,
+		})
+		if err := unstructured.SetNestedSlice(deploy.Object, mounts, "spec", "template", "spec", "containers", "0", "volumeMounts"); err != nil {
+			return err
+		}
+	}
+	env, _, err := unstructured.NestedSlice(deploy.Object, "spec", "template", "spec", "containers", "0", "env")
+	if err != nil {
+		return err
+	}
+	hasEnv := false
+	for _, e := range env {
+		if em, ok := e.(map[string]interface{}); ok {
+			if name, _, _ := unstructured.NestedString(em, "name"); name == "SSL_CERT_FILE" {
+				hasEnv = true
+			}
+		}
+	}
+	if !hasEnv {
+		env = append(env, map[string]interface{}{
+			"name":  "SSL_CERT_FILE",
+			"value": "/etc/ppe-ca/service-ca.crt",
+		})
+		return unstructured.SetNestedSlice(deploy.Object, env, "spec", "template", "spec", "containers", "0", "env")
+	}
+	return nil
 }
