@@ -125,10 +125,122 @@ func configureExtProcPolicyEngine(resources []unstructured.Unstructured, maasAPI
 	if patched == 0 {
 		return fmt.Errorf("no plugin ConfigMap pre-extproc.yaml found to inject the policy filter for tenant %s", tenantID)
 	}
-	// The pre-auth chain loads its config once at startup, so a ConfigMap
-	// change needs a pod roll. Stamp the pre chain's hash on the pre
-	// Deployment's pod template (the shared post chain has the same
-	// mechanism in configureSharedExtProc).
+	// The rendered ext_proc NetworkPolicy only allows DNS, the gateway and
+	// the Kubernetes API; PPE's api-key directory needs maas-api:8443, and
+	// the ext_proc pods need the gateway label maas-api's ingress policy
+	// matches on.
+	configurePPENetworkPolicy(resources, gatewayNamespaceOf(resources))
+	if err := stampPreDeploymentHash(resources, tenantID, maasAPIURL); err != nil {
+		return err
+	}
+	return nil
+}
+
+// gatewayNamespaceOf returns the namespace of the first Deployment in the
+// rendered set (ext_proc Deployments land in the gateway namespace).
+func gatewayNamespaceOf(resources []unstructured.Unstructured) string {
+	for i := range resources {
+		if resources[i].GetKind() == "Deployment" && resources[i].GetNamespace() != "" {
+			return resources[i].GetNamespace()
+		}
+	}
+	return ""
+}
+
+// ppeEgressRule is the egress rule the PPE api-key directory needs: TCP 8443
+// to maas-api's namespace.
+func ppeEgressRule() map[string]interface{} {
+	return map[string]interface{}{
+		"to": []interface{}{
+			map[string]interface{}{
+				"namespaceSelector": map[string]interface{}{
+					"matchLabels": map[string]interface{}{
+						"kubernetes.io/metadata.name": "odh-ai-gateway-infra",
+					},
+				},
+			},
+		},
+		"ports": []interface{}{
+			map[string]interface{}{"port": int64(8443), "protocol": "TCP"},
+		},
+	}
+}
+
+// configurePPENetworkPolicy appends the maas-api egress rule to the rendered
+// ext_proc NetworkPolicy. The controller re-renders the policy on every
+// reconcile, so this must live in the render path, not a live patch.
+func configurePPENetworkPolicy(resources []unstructured.Unstructured, gatewayNamespace string) {
+	for i := range resources {
+		np := &resources[i]
+		if np.GetKind() != "NetworkPolicy" || np.GetNamespace() != gatewayNamespace {
+			continue
+		}
+		egress, found, err := unstructured.NestedSlice(np.Object, "spec", "egress")
+		if err != nil || !found {
+			continue
+		}
+		rule := ppeEgressRule()
+		dup := false
+		for _, existing := range egress {
+			m, ok := existing.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			ports, _, _ := unstructured.NestedSlice(m, "ports")
+			for _, p := range ports {
+				pm, ok := p.(map[string]interface{})
+				if ok {
+					port, _, _ := unstructured.NestedInt64(pm, "port")
+					if port == 8443 {
+						dup = true
+					}
+				}
+			}
+		}
+		if dup {
+			continue
+		}
+		egress = append(egress, rule)
+		if err := unstructured.SetNestedSlice(np.Object, egress, "spec", "egress"); err == nil {
+			// Label the ext_proc pods so maas-api's ingress policy (which
+			// admits the Envoy gateway pods) also admits the directory calls.
+			_ = labelDeploymentsAsGateway(resources, gatewayNamespace)
+		}
+	}
+}
+
+// labelDeploymentsAsGateway adds the gateway pod label the maas-api ingress
+// NetworkPolicy matches on to the ext_proc Deployments, so their api-key
+// directory calls are admitted.
+func labelDeploymentsAsGateway(resources []unstructured.Unstructured, gatewayNamespace string) error {
+	for i := range resources {
+		deploy := &resources[i]
+		if deploy.GetKind() != "Deployment" || deploy.GetNamespace() != gatewayNamespace {
+			continue
+		}
+		labels, found, err := unstructured.NestedStringMap(deploy.Object, "spec", "template", "metadata", "labels")
+		if err != nil || !found {
+			continue
+		}
+		if v, ok := labels["gateway.networking.k8s.io/gateway-name"]; ok && v != "" {
+			continue
+		}
+		if labels == nil {
+			labels = map[string]string{}
+		}
+		labels["gateway.networking.k8s.io/gateway-name"] = "maas-default-gateway"
+		if err := unstructured.SetNestedStringMap(deploy.Object, labels, "spec", "template", "metadata", "labels"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// stampPreDeploymentHash rolls the pre-auth Deployment when the PPE config
+// changes. The pre-auth chain loads its config once at startup, so a ConfigMap
+// change needs a pod roll; the shared post chain has the same mechanism in
+// configureSharedExtProc.
+func stampPreDeploymentHash(resources []unstructured.Unstructured, tenantID, maasAPIURL string) error {
 	preDeploy := PayloadPreProcessingDeploymentName(tenantID)
 	configHash := sha256.Sum256([]byte(ppePolicyDocument(maasAPIURL, tenantID)))
 	for i := range resources {
