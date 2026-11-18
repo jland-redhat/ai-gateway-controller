@@ -19,10 +19,12 @@ package tenant
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"sigs.k8s.io/yaml"
 )
 
 // PPE policy-engine POC (see docs/proposals/praxis-policy-engine-adoption.md).
@@ -134,6 +136,147 @@ func configureExtProcPolicyEngine(resources []unstructured.Unstructured, maasAPI
 		return err
 	}
 	return nil
+}
+
+// collapseExtProcForPPE realizes the single-proxy-instance shape (ADR
+// section 2) for a PPE tenant. Called from the reconciler after
+// configureExtProcPolicyEngine.
+func collapseExtProcForPPE(resources []unstructured.Unstructured, tenantID string) ([]unstructured.Unstructured, error) {
+	return collapsePreIntoPost(resources, tenantID)
+}
+
+// collapsePreIntoPost merges the pre-auth chain (BBR + policy filter) into
+// the post-auth chain and drops the pre-auth Deployment, realizing the ADR's
+// single-proxy-instance target shape for PPE tenants: one ExtProc
+// Deployment, one config, one Envoy ext_proc filter. The praxis server
+// concatenates every filter_chains entry in order, so prepending the pre
+// filters to the post chain preserves the wasm-era ordering (BBR → policy →
+// payload processing).
+func collapsePreIntoPost(resources []unstructured.Unstructured, tenantID string) ([]unstructured.Unstructured, error) {
+	// 1. Merge the chains in the plugins ConfigMap.
+	var preFilters []interface{}
+	for i := range resources {
+		cm := &resources[i]
+		if cm.GetKind() != "ConfigMap" || !isOwnedPluginConfigMap(cm.GetName()) {
+			continue
+		}
+		data, found, err := unstructured.NestedStringMap(cm.Object, "data")
+		if err != nil || !found {
+			continue
+		}
+		pre, ok := data["pre-extproc.yaml"]
+		if !ok {
+			continue
+		}
+		post, ok := data["extproc.yaml"]
+		if !ok {
+			continue
+		}
+		merged, filters, err := mergePraxisChains(pre, post)
+		if err != nil {
+			return nil, fmt.Errorf("merge pre/post chains: %w", err)
+		}
+		preFilters = filters
+		data["extproc.yaml"] = merged
+		delete(data, "pre-extproc.yaml")
+		if err := unstructured.SetNestedStringMap(cm.Object, data, "data"); err != nil {
+			return nil, fmt.Errorf("ConfigMap %s/%s: write merged chain: %w", cm.GetNamespace(), cm.GetName(), err)
+		}
+	}
+	if preFilters == nil {
+		return nil, fmt.Errorf("no plugin ConfigMap chain pair found to collapse for tenant %s", tenantID)
+	}
+
+	// 2. Drop the pre-auth Deployment and everything else named for it.
+	prePrefix := PayloadPreProcessingDeploymentName(tenantID)
+	kept := make([]unstructured.Unstructured, 0, len(resources))
+	for i := range resources {
+		if strings.HasPrefix(resources[i].GetName(), prePrefix) {
+			continue
+		}
+		kept = append(kept, resources[i])
+	}
+	resources = kept
+
+	// 3. EnvoyFilter: remove the ipp-pre ext_proc INSERT patches so a single
+	// ext_proc filter (ipp, → payload-processing) remains.
+	for i := range resources {
+		ef := &resources[i]
+		if ef.GetKind() != "EnvoyFilter" {
+			continue
+		}
+		patches, found, err := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
+		if err != nil || !found {
+			continue
+		}
+		keptPatches := patches[:0]
+		for _, p := range patches {
+			pm, ok := p.(map[string]interface{})
+			if !ok {
+				keptPatches = append(keptPatches, p)
+				continue
+			}
+			name, _, _ := unstructured.NestedString(pm, "patch", "value", "name")
+			if name == "envoy.filters.http.ext_proc.ipp-pre" {
+				continue
+			}
+			keptPatches = append(keptPatches, pm)
+		}
+		if err := unstructured.SetNestedSlice(ef.Object, keptPatches, "spec", "configPatches"); err != nil {
+			return nil, fmt.Errorf("EnvoyFilter %s/%s: write patches: %w", ef.GetNamespace(), ef.GetName(), err)
+		}
+	}
+	return resources, nil
+}
+
+// mergePraxisChains concatenates the pre chain's filters ahead of the post
+// chain's filters in one document (post's server block wins: metrics_auth
+// off, matching the post-auth ServiceAccount that holds no API permissions).
+// Returns the merged YAML and the pre filters it moved.
+func mergePraxisChains(pre, post string) (string, []interface{}, error) {
+	var preDoc, postDoc map[string]interface{}
+	if err := yaml.Unmarshal([]byte(pre), &preDoc); err != nil {
+		return "", nil, fmt.Errorf("parse pre chain: %w", err)
+	}
+	if err := yaml.Unmarshal([]byte(post), &postDoc); err != nil {
+		return "", nil, fmt.Errorf("parse post chain: %w", err)
+	}
+	preChains, _, _ := unstructured.NestedSlice(preDoc, "filter_chains")
+	var preFilters []interface{}
+	for _, c := range preChains {
+		cm, ok := c.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		fs, _, _ := unstructured.NestedSlice(cm, "filters")
+		preFilters = append(preFilters, fs...)
+	}
+	if len(preFilters) == 0 {
+		return "", nil, errors.New("pre chain has no filters")
+	}
+	postChains, found, err := unstructured.NestedSlice(postDoc, "filter_chains")
+	if err != nil || !found {
+		return "", nil, fmt.Errorf("post chain has no filter_chains: %v", err)
+	}
+	first, ok := postChains[0].(map[string]interface{})
+	if !ok {
+		return "", nil, errors.New("post chain[0] is not a map")
+	}
+	postFilters, _, _ := unstructured.NestedSlice(first, "filters")
+	if err := unstructured.SetNestedSlice(first, append(preFilters, postFilters...), "filters"); err != nil {
+		return "", nil, fmt.Errorf("write merged filters: %w", err)
+	}
+	// praxis 0.8.0 compatibility (see patchPreChainForPraxis08): the merged
+	// chain carries the policy filter, so the server needs the unbounded-body
+	// opt-in clamped to its cap.
+	if _, ok := postDoc["insecure_options"]; !ok {
+		postDoc["insecure_options"] = map[string]interface{}{"allow_unbounded_body": true}
+	}
+	out, err := yaml.Marshal(postDoc)
+	if err != nil {
+		return "", nil, fmt.Errorf("marshal merged chain: %w", err)
+	}
+	return string(out), preFilters, nil
 }
 
 // gatewayNamespaceOf returns the namespace of the first Deployment in the

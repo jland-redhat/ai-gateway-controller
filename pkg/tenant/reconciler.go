@@ -639,6 +639,13 @@ func (r *Reconciler) reconcilePraxis(ctx context.Context, log logr.Logger, mtc *
 		if err := configureExtProcPolicyEngine(resources, maasAPIURL, maasAPIHost, tenantID, extProcMaxBodyBytes); err != nil {
 			return ctrl.Result{}, fmt.Errorf("configure PPE policy engine: %w", err)
 		}
+		// Single-proxy-instance shape (ADR section 2): merge the pre-auth
+		// chain into the post-auth chain and drop the pre-auth Deployment.
+		collapsed, err := collapseExtProcForPPE(resources, tenantID)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("collapse ExtProc for PPE: %w", err)
+		}
+		resources = collapsed
 	}
 	resources = omitNetworkPolicies(resources, r.SkipNetworkPolicy, log, gatewayNamespace)
 	scaling := resolveIPPScaling(mtc, log)
