@@ -545,16 +545,24 @@ func mountServiceCA(deploy *unstructured.Unstructured) error {
 	}
 	if !hasVol {
 		volumes = append(volumes, map[string]interface{}{
-			"name": "ppe-service-ca",
-			"configMap": map[string]interface{}{
-				"name": "service-ca-bundle",
-			},
+			"name":      "ppe-service-ca",
+			"configMap": map[string]interface{}{"name": "service-ca-bundle"},
 		})
 		if err := unstructured.SetNestedSlice(deploy.Object, volumes, "spec", "template", "spec", "volumes"); err != nil {
 			return err
 		}
 	}
-	mounts, _, err := unstructured.NestedSlice(deploy.Object, "spec", "template", "spec", "containers", "0", "volumeMounts")
+	// containers is a list: read it, mutate the first element's maps, write
+	// the list back (NestedSlice cannot index into list items).
+	containers, _, err := unstructured.NestedSlice(deploy.Object, "spec", "template", "spec", "containers")
+	if err != nil || len(containers) == 0 {
+		return fmt.Errorf("read containers: %v", err)
+	}
+	container, ok := containers[0].(map[string]interface{})
+	if !ok {
+		return errors.New("containers[0] is not a map")
+	}
+	mounts, _, err := unstructured.NestedSlice(container, "volumeMounts")
 	if err != nil {
 		return err
 	}
@@ -568,15 +576,13 @@ func mountServiceCA(deploy *unstructured.Unstructured) error {
 	}
 	if !hasMount {
 		mounts = append(mounts, map[string]interface{}{
-			"name":      "ppe-service-ca",
-			"mountPath": "/etc/ppe-ca",
-			"readOnly":  true,
+			"name": "ppe-service-ca", "mountPath": "/etc/ppe-ca", "readOnly": true,
 		})
-		if err := unstructured.SetNestedSlice(deploy.Object, mounts, "spec", "template", "spec", "containers", "0", "volumeMounts"); err != nil {
+		if err := unstructured.SetNestedSlice(container, mounts, "volumeMounts"); err != nil {
 			return err
 		}
 	}
-	env, _, err := unstructured.NestedSlice(deploy.Object, "spec", "template", "spec", "containers", "0", "env")
+	env, _, err := unstructured.NestedSlice(container, "env")
 	if err != nil {
 		return err
 	}
@@ -590,10 +596,11 @@ func mountServiceCA(deploy *unstructured.Unstructured) error {
 	}
 	if !hasEnv {
 		env = append(env, map[string]interface{}{
-			"name":  "SSL_CERT_FILE",
-			"value": "/etc/ppe-ca/service-ca.crt",
+			"name": "SSL_CERT_FILE", "value": "/etc/ppe-ca/service-ca.crt",
 		})
-		return unstructured.SetNestedSlice(deploy.Object, env, "spec", "template", "spec", "containers", "0", "env")
+		if err := unstructured.SetNestedSlice(container, env, "env"); err != nil {
+			return err
+		}
 	}
-	return nil
+	return unstructured.SetNestedSlice(deploy.Object, containers, "spec", "template", "spec", "containers")
 }
