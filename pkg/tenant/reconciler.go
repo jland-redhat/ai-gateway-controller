@@ -634,7 +634,7 @@ func (r *Reconciler) reconcilePraxis(ctx context.Context, log logr.Logger, mtc *
 		// namespace; its service CA is not in the policy filter's trust
 		// store, so the POC uses the plain-http service port.
 		maasAPIHost := "maas-api." + infraNamespace + ".svc.cluster.local"
-		maasAPIURL := "http://" + maasAPIHost + ":8080/internal/v1/api-keys/validate"
+		maasAPIURL := "https://" + maasAPIHost + ":8443/internal/v1/api-keys/validate"
 		log.Info("policy-engine=ppe: injecting Praxis Policy Engine into the pre-auth chain", "maasAPIURL", maasAPIURL)
 		if err := configureExtProcPolicyEngine(resources, maasAPIURL, maasAPIHost, tenantID); err != nil {
 			return ctrl.Result{}, fmt.Errorf("configure PPE policy engine: %w", err)
