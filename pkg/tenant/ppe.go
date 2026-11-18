@@ -321,14 +321,18 @@ func ppePolicyDocument(maasAPIURL, tenantID string) string {
 	b.WriteString("    config:\n")
 	b.WriteString("      namespace: maas-subscription\n")
 	b.WriteString("      bindings:\n")
-	b.WriteString("        subscription: claim.subscription\n")
+	// Keyed on subject.id: the api-key record's unconsumed fields do not
+	// surface as claim.* attributes for limitador bindings
+	// (ratelimit.missing_attribute), and subject.id matches the upstream
+	// rate-limit fixture's shape.
+	b.WriteString("        subject_id: subject.id\n")
 	b.WriteString("      limits:\n")
 	// Same default the validation flow trips (~4 requests): the free
 	// simulator subscription's windowed request limit. Single-replica only;
 	// counters are per instance (ADR MAJOR GAP 3).
 	b.WriteString("        - max: 4\n")
 	b.WriteString("          seconds: 60\n")
-	b.WriteString("          variables: [subscription]\n")
+	b.WriteString("          variables: [subject_id]\n")
 	b.WriteString("\n")
 	b.WriteString("global:\n")
 	b.WriteString("  authentication:\n")
