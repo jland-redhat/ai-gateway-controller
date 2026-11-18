@@ -106,15 +106,13 @@ func configureExtProcPolicyEngine(resources []unstructured.Unstructured, maasAPI
 		if !ok {
 			continue
 		}
-		// praxis 0.8.0 compatibility: the BBR chain's llmisvc resolver now
-		// requires an explicit per-filter body bound, and the policy filter's
-		// nested pipeline trips the unbounded-StreamBuffer check unless
-		// allow_unbounded_body opts in (it then clamps to the server cap,
-		// which the pre chain keeps at maxBodyBytes).
-		pre, changed := patchPreChainForPraxis08(pre, maxBodyBytes)
-		if changed || !strings.Contains(pre, "filter: policy") {
+		// Inject the policy filter first (indented under the chain), then the
+		// praxis 0.8.0 patches: patchPreChainForPraxis08 appends a top-level
+		// insecure_options key, which must come after the chain block.
+		if !strings.Contains(pre, "filter: policy") {
 			pre += fmt.Sprintf(preAuthPolicyFilterYAML, maasAPIHost)
 		}
+		pre, _ = patchPreChainForPraxis08(pre, maxBodyBytes)
 		data["pre-extproc.yaml"] = pre
 		data[PPDPolicyConfigMapKey] = ppePolicyDocument(maasAPIURL, tenantID)
 		if err := unstructured.SetNestedStringMap(cm.Object, data, "data"); err != nil {
@@ -141,7 +139,10 @@ func patchPreChainForPraxis08(pre string, maxBodyBytes int64) (string, bool) {
 			fmt.Sprintf("%s        max_body_bytes: %d\n", resolver, maxBodyBytes), 1)
 		changed = true
 	}
-	if !strings.Contains(pre, "allow_unbounded_body") {
+	// Match the key, not the substring: the vendored chain carries a comment
+	// mentioning allow_unbounded_body (RHOAIENG-102139 note), which must not
+	// suppress this append.
+	if !strings.Contains(pre, "\ninsecure_options:") {
 		pre += fmt.Sprintf("\ninsecure_options:\n  # praxis 0.8.0: the policy filter's nested pipeline trips the\n  # unbounded-StreamBuffer check; allow and clamp to the server cap.\n  allow_unbounded_body: true\n")
 		changed = true
 	}
