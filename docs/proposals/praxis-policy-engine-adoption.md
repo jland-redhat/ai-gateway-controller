@@ -487,6 +487,78 @@ inference, 401 without token, 429 after ~4 requests) plus
 expectations: 401/403/429 semantics and `x-maas-*` headers match the
 rhcl tenant.
 
+### POC architecture: before and after
+
+**Before — the RHCL stack (what runs on a `policy-engine: rhcl` tenant
+today).** Two ExtProc Deployments bracket the Kuadrant wasm filter; authn,
+authz and rate limiting all leave the gateway process:
+
+```mermaid
+flowchart LR
+    C[Client] --> RT[OpenShift Router<br/>reencrypt, SNI = svc DNS] --> EN["Envoy (maas-default-gateway)"]
+    subgraph ENVOY["Envoy filter chain"]
+        EP1["ext_proc ipp-pre<br/>Deployment: payload-pre-processing"]
+        WASM["RHCL Kuadrant wasm"]
+        EP2["ext_proc ipp<br/>Deployment: payload-processing"]
+    end
+    EN --> EP1 --> WASM --> EP2 --> RTR[router] --> KS[KServe model]
+    EP1 -. "BBR chain:<br/>model header, provider resolve" .-> P1[pod 1<br/>512 MiB]
+    WASM -. "API-key validate<br/>subscription select" .-> API[maas-api]
+    WASM -. "rate limits" .-> LIM[Limitador] -. counters .-> RED[(Redis)]
+    subgraph PPE_ISSUES["why this is being replaced"]
+        I1["4 gRPC body transfers<br/>(2 filters x req+resp)"]
+        I2["2 pods, 2 configs, 2 rolls"]
+        I3["wasm anchors x 4 Istio variants<br/>priority-10 ordering dance"]
+    end
+```
+
+**After — the POC's single-instance PPE shape
+(`policy-engine: ppe`).** One Deployment, one config, one ext_proc filter;
+the Praxis Policy Engine is embedded in the chain as a `policy` filter
+in the position the wasm filter occupied:
+
+```mermaid
+flowchart LR
+    C[Client] --> RT[OpenShift Router<br/>reencrypt] --> EN["Envoy (maas-default-gateway)"]
+    subgraph ENVOY["Envoy filter chain"]
+        WASM["RHCL Kuadrant wasm<br/>(shadow — still enforcing)"]
+        EP2["ext_proc ipp — the ONE filter"]
+    end
+    EN --> WASM --> EP2 --> RTR[router] --> KS[KServe model]
+    EP2 -. "merged chain (7 filters, one pod):<br/>BBR → policy → header guard<br/>→ request_id → stream_usage_inject" .-> P1[pod 1<br/>512 MiB]
+    subgraph PPE["policy filter (embedded PPE)"]
+        ID["identity/api-key"]
+        RL["ratelimit/limitador<br/>in-process"]
+        AZ["require(authenticated)"]
+    end
+    EP2 --- PPE
+    ID -. "HTTPS validate<br/>SSL_CERT_FILE = service CA" .-> API[maas-api]
+    RL -. "counters per-replica only<br/>no Redis, no sharing" .-> MEM[(memory)]
+```
+
+**Where the POC's issues live** — every red mark below is an entry in the
+honest ledger that follows:
+
+```mermaid
+flowchart TB
+    subgraph GW["single ExtProc pod (openshift-ingress)"]
+        BBR["BBR filters"] --> POL["policy filter (PPE)"] --> POST["post-auth filters<br/>(header guard, usage inject)"]
+    end
+    POL -->|"#3 per-user not per-subscription key<br/>(record claims don't surface)"| RLIM["limitador binding"]
+    POL -->|"directory call needs:<br/>service CA mount (SSL_CERT_FILE)<br/>netpol egress 8443 + gateway label"| API["maas-api :8443"]
+    POL -->|"NO model-access rules —<br/>MaaSAuthPolicy unenforced (#1)<br/>NO entitlement checks (#2)<br/>NO token budgets / TRLP (#4)"| DEC["policy decision"]
+    RLIM -->|"per-replica counters (#5)<br/>single replica only"| CTR[(memory)]
+    WASM2["RHCL wasm (shadow, #8)"] -->|"still enforces AuthPolicy<br/>maas-controller recreates CRs"| BBR
+    IMG["image requirements (#9, #10):<br/>non-FIPS build, praxis 0.8,<br/>panic=unwind, 0.8 validation shims"] -.-> GW
+```
+
+Net differences vs the RHCL shape: one pod instead of two (plus wasm),
+one body transfer over gRPC instead of two, authz and rate limiting
+in-process instead of Authorino/Limitador/Redis round trips — at the
+cost of everything in the ledger (no shared counters, no model-access
+rules, no token budgets, shadow-mode RHCL still required for
+MaaSAuthPolicy).
+
 ### POC results: what does NOT work, and why (honest ledger)
 
 The validation flow passes, but only because of deliberate carve-outs.
