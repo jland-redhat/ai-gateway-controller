@@ -1,0 +1,10 @@
+[
+  {"username": "seeduser1@example.com", "first_name": "Seed", "last_name": "User One"},
+  {"username": "seeduser2@example.com", "first_name": "Seed", "last_name": "User Two"},
+  {"username": "seeduser3@example.com", "first_name": "Seed", "last_name": "User Three"},
+  {"username": "seeduser4@example.com", "first_name": "Seed", "last_name": "User Four"},
+  {"username": "seeduser5@example.com", "first_name": "Seed", "last_name": "User Five"},
+  {"username": "seeduser6@example.com", "first_name": "Seed", "last_name": "User Six"},
+  {"username": "seeduser7@example.com", "first_name": "Seed", "last_name": "User Seven"},
+  {"username": "seeduser8@example.com", "first_name": "Seed", "last_name": "User Eight"}
+]

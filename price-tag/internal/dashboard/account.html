@@ -1,0 +1,1084 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My usage — EnMaaS</title>
+<script>
+  (function () {
+    try {
+      var params = new URLSearchParams(location.search);
+      if (params.get('tab') === 'keys' || params.get('first') === '1') {
+        document.documentElement.classList.add('preload-keys');
+      }
+    } catch (e) {}
+  })();
+</script>
+<style>
+  :root{
+    --bg:#0b0e11;--c1:#141820;--c2:#1a2030;--c3:#232d40;--bdr:#2e3848;
+    --t:#e2e6ec;--t2:#8090a8;--blu:#4da0f8;--grn:#3dcc6e;--org:#eba830;--red:#e8554e;--pur:#a88cf8;--cyn:#38d4c2;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:var(--bg);color:var(--t);font:13px/1.55 Inter,-apple-system,BlinkMacSystemFont,sans-serif}
+  a{color:var(--blu);text-decoration:none}
+  .appbar{position:sticky;top:12px;z-index:40;display:flex;align-items:center;gap:16px;flex-wrap:wrap;
+          min-height:58px;padding:12px 22px;background:rgba(20,24,32,.96);backdrop-filter:blur(10px);
+          border:1px solid #2e3848;border-radius:10px;
+          width:calc(100% - 40px);max-width:1360px;margin:20px auto 16px}
+  .appbar .logo{display:flex;align-items:center;gap:0;color:#e2e6ec;text-decoration:none;white-space:nowrap;
+                font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px;font-weight:700;line-height:18px;letter-spacing:.2px}
+  .appbar .logo .en{color:#3dcc6e}
+  .appbar .logo em{color:#4da0f8;font-style:normal}
+  .appbar nav{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+  .appbar nav a,.appbar nav button{display:inline-flex;align-items:center;justify-content:center;background:none;border:0;cursor:pointer;
+    color:#8090a8;font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:12px;font-weight:600;line-height:18px;
+    padding:6px 14px;border-radius:8px;text-decoration:none;white-space:nowrap}
+  .appbar nav a:hover,.appbar nav button:hover,.appbar nav .on{color:#e2e6ec;background:#22262c}
+  .ab-right{margin-left:auto;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .identity{font-size:12px;color:#8090a8;text-align:right;line-height:1.25}
+  .identity b{display:block;color:#e2e6ec;font-weight:600}
+  .logout,.pricing-btn{background:transparent;border:1px solid #2e3848;color:#8090a8;border-radius:8px;
+    padding:6px 14px;font:600 12px/18px Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;cursor:pointer}
+  .logout:hover{color:#e8554e;border-color:#e8554e}
+  .pricing-btn{color:#3dcc6e;border-color:rgba(61,204,110,.45)}
+  .pg{max-width:1220px;margin:0 auto;padding:26px 28px 70px}
+  .pg-head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:20px;flex-wrap:wrap}
+  h1{font-size:22px;font-weight:700}
+  .sub{color:var(--t2);font-size:12px;margin-top:3px}
+  .range{background:var(--c1);border:1px solid var(--bdr);color:var(--t);border-radius:8px;padding:8px 12px;font:600 12px Inter,sans-serif;cursor:pointer;outline:none}
+  .range-group{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end}
+  .custom-range{display:flex;align-items:center;gap:7px;background:var(--c1);border:1px solid var(--bdr);border-radius:9px;padding:5px 6px 5px 9px}
+  .custom-range input[type=date]{background:var(--c2);border:1px solid var(--bdr);color:var(--t);border-radius:6px;padding:6px 8px;font:600 11.5px Inter,sans-serif;color-scheme:dark;outline:none}
+  .custom-range input[type=date]:focus{border-color:var(--blu)}
+  .custom-range .sep{color:var(--t2);font-size:11px}
+  .custom-range .btn{padding:6px 12px;font-size:11px;border-radius:6px}
+  .range-err{width:100%;text-align:right;color:var(--red);font-size:11px;min-height:14px}
+  .banner{display:flex;gap:12px;align-items:flex-start;background:rgba(77,160,248,.08);border:1px solid rgba(77,160,248,.3);
+          border-radius:10px;padding:14px 18px;margin-bottom:20px;font-size:12.5px}
+  .banner b{color:var(--blu)}
+  .scope-note{display:flex;gap:10px;align-items:flex-start;background:rgba(235,168,48,.08);border:1px solid rgba(235,168,48,.34);
+              border-radius:10px;padding:12px 16px;margin-bottom:18px;font-size:12.5px;line-height:1.5}
+  .scope-note .ico{color:var(--org);font-size:14px;line-height:1.35;flex:0 0 auto}
+  .scope-note b{color:var(--org)}
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:18px}
+  .kpi{background:var(--c1);border:1px solid var(--bdr);border-radius:12px;padding:18px 20px;position:relative;overflow:hidden}
+  .kpi::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--accent,var(--blu))}
+  .kpi::after{content:'';position:absolute;right:-40px;top:-40px;width:110px;height:110px;border-radius:50%;
+             background:radial-gradient(circle,var(--accent,var(--blu)) 0%,transparent 70%);opacity:.09;pointer-events:none}
+  .kpi:nth-child(1){--accent:var(--org)}.kpi:nth-child(2){--accent:var(--blu)}
+  .kpi:nth-child(3){--accent:var(--grn)}.kpi:nth-child(4){--accent:var(--pur)}
+  .kpi-label{font-size:10px;text-transform:uppercase;letter-spacing:.9px;color:var(--t2);font-weight:700}
+  .kpi-value{font-size:26px;font-weight:800;margin-top:6px;font-variant-numeric:tabular-nums}
+  .kpi-value.blu{color:var(--blu)}.kpi-value.grn{color:var(--grn)}.kpi-value.org{color:var(--org)}.kpi-value.pur{color:var(--pur)}
+  .kpi-value.budget-ok{color:var(--grn)}.kpi-value.budget-over{color:var(--red)}
+  .kpi-note{font-size:11px;color:var(--t2);margin-top:4px}
+  .bar{height:7px;border-radius:99px;background:var(--c3);margin-top:10px;overflow:hidden}
+  .bar span{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,var(--grn),var(--org));transition:width .4s}
+  .bar span.over{background:linear-gradient(90deg,var(--org),var(--red))}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:18px}
+  .card{background:var(--c1);border:1px solid var(--bdr);border-radius:12px;padding:20px}
+  .card h2{font-size:13px;font-weight:700;margin-bottom:2px}
+  .card .hint{font-size:11px;color:var(--t2);margin-bottom:16px}
+  .metric-toggle{display:flex;gap:3px;margin:2px 0 12px;background:var(--c2);border:1px solid var(--bdr);border-radius:7px;padding:3px;width:max-content}
+  .metric-toggle button{border:0;background:transparent;color:var(--t2);border-radius:5px;padding:4px 9px;font:600 10px Inter,sans-serif;cursor:pointer}
+  .metric-toggle button.on{background:var(--c3);color:var(--t)}
+  .donut-wrap{display:flex;align-items:center;gap:22px;flex-wrap:wrap}
+  .donut-column{display:flex;flex-direction:column;align-items:center;gap:12px;flex:0 0 auto}
+  .donut{width:150px;height:150px;border-radius:50%;position:relative;flex:0 0 auto;background:conic-gradient(var(--c3) 0 100%)}
+  .donut::after{content:'';position:absolute;inset:26px;border-radius:50%;background:var(--c1)}
+  .donut-center{position:absolute;inset:0;display:grid;place-items:center;z-index:1;text-align:center}
+  .donut-center b{display:block;font-size:17px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1.05;text-align:center}
+  .donut-center span{display:block;font-size:9px;text-transform:uppercase;letter-spacing:.7px;color:var(--t2);line-height:1.1;text-align:center;margin-top:3px}
+  .legend{flex:1;min-width:180px;display:flex;flex-direction:column;gap:8px}
+  .legend-row{display:flex;align-items:center;gap:8px;font-size:12px}
+  .sw{width:9px;height:9px;border-radius:3px;flex:0 0 auto}
+  .legend-row .val{margin-left:auto;color:var(--t2);font-variant-numeric:tabular-nums}
+  .legend-row .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:170px}
+  .tbl-wrap{overflow-x:auto}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th{background:var(--c2);color:var(--t2);font-size:10px;text-transform:uppercase;letter-spacing:.6px;padding:9px 12px;text-align:left;font-weight:700;white-space:nowrap}
+  th.sortable{cursor:pointer}th.sortable:hover{color:var(--t)}
+  td{padding:9px 12px;border-top:1px solid var(--bdr);white-space:nowrap}
+  tr:hover td{background:var(--c2)}
+  .num{text-align:right;font-variant-numeric:tabular-nums}
+  .mono{font-family:'SF Mono',SFMono-Regular,Consolas,Menlo,monospace;font-size:11.5px}
+  .pill{display:inline-block;border-radius:99px;padding:2px 9px;font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.5px}
+  .pill.active{background:rgba(61,204,110,.14);color:var(--grn);border:1px solid rgba(61,204,110,.35)}
+  .pill.expiring{background:rgba(235,168,48,.14);color:var(--org);border:1px solid rgba(235,168,48,.35)}
+  .pill.expired,.pill.revoked{background:rgba(232,85,78,.12);color:var(--red);border:1px solid rgba(232,85,78,.3)}
+  .pill.hosted{background:rgba(61,204,110,.12);color:var(--grn);border:1px solid rgba(61,204,110,.3)}
+  .pill.frontier{background:rgba(168,140,248,.12);color:var(--pur);border:1px solid rgba(168,140,248,.3)}
+  .card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}
+  .card-head h2{margin-bottom:2px}
+  .card-head .hint{margin-bottom:0}
+  .recent-actions{display:flex;align-items:center;gap:8px}
+  .live-tag{display:inline-flex;align-items:center;gap:5px;font-size:9.5px;font-weight:800;text-transform:uppercase;
+            letter-spacing:.6px;color:var(--grn);background:rgba(61,204,110,.12);border:1px solid rgba(61,204,110,.35);
+            border-radius:99px;padding:2px 8px;vertical-align:1px}
+  .live-dot{width:6px;height:6px;border-radius:50%;background:var(--grn);box-shadow:0 0 6px var(--grn);animation:pulse 2s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+  .refresh-btn{display:inline-flex;align-items:center;gap:6px;background:var(--c2);border:1px solid var(--bdr);color:var(--t2);
+               border-radius:7px;padding:5px 11px;font:600 10.5px Inter,sans-serif;cursor:pointer}
+  .refresh-btn:hover{color:var(--t);border-color:var(--blu)}
+  .refresh-btn svg{width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+  .refresh-btn.spinning svg{animation:spin .8s linear infinite}
+  .recent-scroll{max-height:420px;overflow:auto;border-radius:8px}
+  .recent-scroll thead th{position:sticky;top:0;z-index:2}
+  .recent-scroll::-webkit-scrollbar{width:8px;height:8px}
+  .recent-scroll::-webkit-scrollbar-thumb{background:var(--c3);border-radius:4px}
+  .recent-scroll::-webkit-scrollbar-track{background:var(--c1)}
+  .model-chip{display:inline-flex;align-items:center;gap:6px;max-width:280px;border-radius:6px;padding:2px 8px;
+              border:1px solid transparent;font-family:'SF Mono',SFMono-Regular,Consolas,Menlo,monospace;font-size:11px;line-height:1.5}
+  .model-chip .mdot{width:6px;height:6px;border-radius:50%;flex:0 0 auto;box-shadow:0 0 6px currentColor}
+  .model-chip .mname{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tok-in{color:var(--blu)}.tok-out{color:var(--grn)}.tok-cached{color:var(--cyn)}
+  .tok-cache-write{color:var(--pur)}.tok-total{color:var(--t);font-weight:700}
+  .tok-legend{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:10px 0 14px;font-size:10px;color:var(--t2)}
+  .tok-legend span{display:inline-flex;align-items:center;gap:5px}
+  .tok-legend i{width:7px;height:7px;border-radius:2px;display:inline-block}
+  .status-ok{color:var(--grn);font-weight:700}.status-err{color:var(--red);font-weight:700}
+  .client-chip{font-weight:600}
+  .empty{padding:40px 20px;text-align:center;color:var(--t2)}
+  .empty b{display:block;color:var(--t);font-size:14px;margin-bottom:6px}
+  .loading{padding:40px;text-align:center;color:var(--t2)}
+  .spinner{width:18px;height:18px;border:2px solid var(--bdr);border-top-color:var(--blu);border-radius:50%;display:inline-block;animation:spin .8s linear infinite;vertical-align:-4px;margin-right:8px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .btn{border:0;border-radius:8px;padding:9px 18px;font:600 12px Inter,sans-serif;cursor:pointer}
+  .btn-primary{background:var(--blu);color:#04121f}
+  .btn-primary:hover:not(:disabled){background:#6cb3ff}
+  .btn-primary:disabled{opacity:.4;cursor:not-allowed}
+  .btn-ghost{background:transparent;border:1px solid var(--bdr);color:var(--t2)}
+  .btn-ghost:hover{color:var(--t);border-color:var(--t2)}
+  .btn-danger{background:rgba(232,85,78,.1);border:1px solid rgba(232,85,78,.35);color:var(--red)}
+  .btn-danger:hover{background:rgba(232,85,78,.2)}
+  .btn-sm{padding:5px 12px;font-size:11px;border-radius:6px}
+  .keys-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:16px;flex-wrap:wrap}
+  .overlay{display:none;position:fixed;inset:0;background:rgba(1,4,9,.72);z-index:100;align-items:center;justify-content:center;padding:20px}
+  .overlay.show{display:flex}
+  .modal{background:var(--c1);border:1px solid var(--bdr);border-radius:14px;width:100%;max-width:520px;padding:24px 26px;box-shadow:0 24px 70px rgba(0,0,0,.6);position:relative;max-height:88vh;overflow:auto}
+  .modal h3{font-size:16px;margin-bottom:4px}
+  .modal .hint{color:var(--t2);font-size:12px;margin-bottom:18px}
+  .field{margin-bottom:14px}
+  .field label{display:block;font-size:10px;text-transform:uppercase;letter-spacing:.7px;color:var(--t2);font-weight:700;margin-bottom:6px}
+  .field input,.field select{width:100%;background:var(--c2);border:1px solid var(--bdr);color:var(--t);border-radius:7px;padding:10px 12px;font:13px Inter,sans-serif;outline:none}
+  .field input:focus,.field select:focus{border-color:var(--blu)}
+  .modal-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:20px}
+  .pricing-modal{max-width:900px}
+  .pricing-table{max-height:62vh;overflow:auto}
+  .pricing-table table{font-size:11.5px}
+  .pricing-table th,.pricing-table td{padding:8px 10px}
+  .pricing-table th{position:sticky;top:0;z-index:1}
+  .pricing-free{color:var(--grn);font-weight:800}
+  .close{position:absolute;top:14px;right:16px;background:none;border:0;color:var(--t2);font-size:20px;cursor:pointer;line-height:1}
+  .close:hover{color:var(--t)}
+  .err{color:var(--red);font-size:12px;min-height:18px;margin-top:6px}
+  .secret{position:relative;background:rgba(61,204,110,.07);border:1px solid rgba(61,204,110,.35);border-radius:9px;padding:14px 16px;margin:6px 0 12px}
+  .secret .lbl{font-size:10px;text-transform:uppercase;letter-spacing:.7px;color:var(--grn);font-weight:800;margin-bottom:6px}
+  .secret code{display:block;padding-right:82px;font-family:'SF Mono',SFMono-Regular,Consolas,Menlo,monospace;font-size:12.5px;word-break:break-all;user-select:all;line-height:1.6}
+  .secret-show,.secret-copy{position:absolute;top:13px;background:none;border:0;color:var(--blu);font:600 11px Inter,sans-serif;cursor:pointer;padding:2px 0}
+  .secret-show{right:50px}
+  .secret-copy{right:14px;width:18px;height:18px;padding:0}
+  .secret-copy svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+  .secret-show:hover,.secret-copy:hover{text-decoration:underline}
+  .key-success{color:var(--t2);font-size:12px;line-height:1.55;margin:12px 0 14px}
+  .key-success strong{display:block;color:var(--grn);font-size:14px;margin-bottom:3px}
+  .key-success a{color:var(--blu);text-decoration:none}
+  .key-success a:hover{text-decoration:underline}
+  .warn{font-size:11px;color:var(--org);margin-top:8px}
+  .saved{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--t2);margin:10px 0 2px}
+  .saved input{accent-color:var(--grn);width:16px;height:16px}
+  pre{background:var(--c2);border:1px solid var(--bdr);border-radius:8px;padding:12px 14px;font-family:'SF Mono',SFMono-Regular,Consolas,Menlo,monospace;font-size:11.5px;white-space:pre-wrap;word-break:break-all;line-height:1.6;position:relative}
+  .copy{position:absolute;top:8px;right:8px;background:rgba(77,160,248,.12);border:1px solid rgba(77,160,248,.3);color:var(--blu);border-radius:5px;padding:3px 9px;font:600 10px Inter,sans-serif;cursor:pointer}
+  .toast{position:fixed;bottom:26px;right:26px;background:var(--grn);color:#06210f;padding:12px 20px;border-radius:9px;font-weight:700;font-size:12px;opacity:0;transform:translateY(14px);transition:.25s;z-index:200;pointer-events:none}
+  .toast.show{opacity:1;transform:none}
+  .toast.err{background:var(--red);color:#fff}
+  .hidden{display:none!important}
+  html.preload-keys #view-usage{display:none!important}
+  html.preload-keys #view-keys{display:block!important}
+  html.preload-keys #tab-usage{color:var(--t2);background:none}
+  html.preload-keys #tab-keys{color:var(--t);background:#22262c}
+  @media(max-width:900px){.kpis{grid-template-columns:repeat(2,1fr)}.grid2{grid-template-columns:1fr}}
+  @media(max-width:640px){.pg{padding:18px 14px 60px}.appbar{top:8px;padding:10px 14px;gap:10px}.identity{display:none}.kpis{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<header class="appbar">
+  <a class="logo" href="/account"><span class="en">En</span><em>MaaS</em></a>
+  <nav>
+    <button class="tab" id="tab-usage" data-tab="usage">My usage</button>
+    <button class="tab" id="tab-keys" data-tab="keys">API keys</button>
+    <a href="/dashboard" id="nav-org" style="display:none" title="Usage for the whole organisation">Org usage</a>
+    <a href="/manager" id="nav-team" style="display:none" title="Usage for everyone on your team">My team</a>
+    <a href="/routing" id="nav-routing" style="display:none">Routing</a>
+    <a href="/admin" id="nav-admin" style="display:none">Admin</a>
+  </nav>
+  <div class="ab-right">
+    <div class="identity"><b id="who-name">…</b><span id="who-sub"></span></div>
+     <button class="pricing-btn" id="pricing-open">Pricing</button>
+     <button class="logout" onclick="location.href='/logout'">Logout</button>
+  </div>
+</header>
+
+<main class="pg">
+  <div class="scope-note" role="note">
+    <span class="ico" aria-hidden="true">ⓘ</span>
+    <div><b>EnMaaS usage.</b> This page shows the usage recorded by this EnMaaS deployment for you. It does not include other AI tools or platforms; check those tools for their usage and cost.</div>
+  </div>
+
+  <div class="banner hidden" id="first-banner">
+    <div>🎉</div>
+    <div><b>Welcome to EnMaaS.</b> Your account is ready. New users should follow the EnMaaS onboarding process to get started; once it is complete, keys you create here are shown only once, so store them in your password manager or approved secret store.</div>
+  </div>
+
+  <!-- ============================== USAGE ============================== -->
+  <section id="view-usage">
+    <div class="pg-head">
+      <div>
+        <h1>My usage</h1>
+        <div class="sub" id="usage-sub">Month to date · updated just now</div>
+      </div>
+      <div class="range-group">
+        <select class="range" id="range">
+          <option value="mtd" selected>Month to date</option>
+          <option value="24h">Last 24 hours</option>
+          <option value="7d">Last 7 days</option>
+          <option value="30d">Last 30 days</option>
+          <option value="90d">Last 90 days</option>
+          <option value="365d">Last 12 months</option>
+          <option value="custom">Custom range…</option>
+        </select>
+        <div class="custom-range hidden" id="custom-range">
+          <input type="date" id="range-from" aria-label="From date">
+          <span class="sep">→</span>
+          <input type="date" id="range-to" aria-label="To date">
+          <button class="btn btn-primary" id="range-apply">Apply</button>
+        </div>
+        <div class="range-err" id="range-err"></div>
+      </div>
+    </div>
+
+    <div class="kpis">
+      <div class="kpi"><div class="kpi-label">My spend</div><div class="kpi-value org" id="kpi-spend">—</div><div class="kpi-note" id="kpi-spend-note">Calculated by EnMaaS</div></div>
+      <div class="kpi"><div class="kpi-label">Requests</div><div class="kpi-value blu" id="kpi-requests">—</div><div class="kpi-note" id="kpi-requests-note">in this period</div></div>
+      <div class="kpi"><div class="kpi-label">Tokens</div><div class="kpi-value grn" id="kpi-tokens">—</div><div class="kpi-note" id="kpi-tokens-note">prompt + completion</div></div>
+      <div class="kpi"><div class="kpi-label">Monthly budget</div><div class="kpi-value pur" id="kpi-budget">—</div>
+        <div class="bar"><span id="kpi-budget-bar" style="width:0%"></span></div>
+        <div class="kpi-note" id="kpi-budget-note">quota usage</div></div>
+    </div>
+
+    <div class="grid2">
+      <div class="card">
+        <h2>Spend by model</h2>
+        <div class="hint">Which models are consuming your budget</div>
+        <div class="donut-wrap">
+          <div class="donut-column">
+            <div class="donut" id="model-donut"><div class="donut-center"><div><b id="model-total">—</b><span id="model-total-label">cost</span></div></div></div>
+            <div class="metric-toggle" role="group" aria-label="Model chart metric">
+              <button type="button" class="on" data-model-metric="cost">Cost</button>
+              <button type="button" data-model-metric="tokens">Tokens</button>
+              <button type="button" data-model-metric="requests">Requests</button>
+            </div>
+          </div>
+          <div class="legend" id="model-legend"></div>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Hosted vs frontier</h2>
+        <div class="hint">Hosted runs on EnMaaS infrastructure; frontier calls external providers</div>
+        <div class="donut-wrap">
+          <div class="donut-column">
+            <div class="donut" id="split-donut"><div class="donut-center"><div><b id="split-pct">—</b><span>hosted</span></div></div></div>
+            <div class="metric-toggle" role="group" aria-label="Hosted versus frontier metric">
+              <button type="button" class="on" data-split-metric="cost">Cost</button>
+              <button type="button" data-split-metric="tokens">Tokens</button>
+              <button type="button" data-split-metric="requests">Requests</button>
+            </div>
+          </div>
+          <div class="legend" id="split-legend"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:18px">
+      <h2>Model detail</h2>
+      <div class="hint">Spend and tokens for the selected period</div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th data-table-sort="model">Model</th><th>Type</th><th class="num" data-table-sort="requests">Requests</th><th class="num" data-table-sort="tokens">Tokens</th><th class="num" data-table-sort="cost">Spend</th><th class="num" data-table-sort="share">Share</th></tr></thead>
+          <tbody id="model-rows"><tr><td colspan="6"><div class="loading"><span class="spinner"></span>Loading usage…</div></td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <h2>Recent transactions <span class="live-tag"><span class="live-dot"></span>live</span></h2>
+          <div class="hint">Your last requests through the gateway, with full token breakdown</div>
+        </div>
+        <div class="recent-actions">
+          <button class="refresh-btn" id="recent-refresh" type="button" title="Refresh recent transactions">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36"></path><path d="M21 3v6h-6"></path></svg>
+            Refresh
+          </button>
+        </div>
+      </div>
+      <div class="tok-legend" aria-label="Token type legend">
+        <span><i style="background:var(--blu)"></i>Input</span>
+        <span><i style="background:var(--grn)"></i>Output</span>
+        <span><i style="background:var(--cyn)"></i>Cached</span>
+        <span><i style="background:var(--pur)"></i>Cache write</span>
+        <span><i style="background:var(--t)"></i>Total</span>
+      </div>
+      <div class="recent-scroll">
+        <table>
+          <thead><tr>
+            <th>Time</th><th>Model</th><th>Client</th><th>Provider</th><th>Status</th>
+            <th class="num" title="Prompt / input tokens">Input</th>
+            <th class="num" title="Completion / output tokens">Output</th>
+            <th class="num" title="Prompt tokens served from cache">Cached</th>
+            <th class="num" title="Tokens written to the cache">Cache write</th>
+            <th class="num" title="Input + output tokens">Total</th>
+            <th class="num">Cost</th>
+          </tr></thead>
+          <tbody id="recent-rows"><tr><td colspan="11"><div class="loading"><span class="spinner"></span>Loading transactions…</div></td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================== KEYS ============================== -->
+  <section id="view-keys" class="hidden">
+    <div class="pg-head">
+      <div>
+        <h1>API keys</h1>
+        <div class="sub">Keys authenticate your tools against the EnMaaS gateway. They are shown only once.</div>
+      </div>
+      <button class="btn btn-primary" id="create-btn">+ Create key</button>
+    </div>
+
+    <div class="card">
+      <div class="keys-head">
+        <div>
+          <h2>My keys</h2>
+          <div class="hint" style="margin-bottom:0">Active, expiring, and revoked keys for your account</div>
+        </div>
+      </div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Name</th><th>Group</th><th>Status</th><th>Created</th><th>Expires</th><th>Last used</th><th></th></tr></thead>
+          <tbody id="key-rows"><tr><td colspan="7"><div class="loading"><span class="spinner"></span>Loading keys…</div></td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+  </section>
+</main>
+
+<!-- Create key modal -->
+<div class="overlay" id="create-overlay">
+  <div class="modal">
+    <button class="close" data-close="create-overlay">×</button>
+    <div id="create-step">
+      <h3>Create API key</h3>
+      <div class="hint">Name it after the tool or machine that will use it.</div>
+      <div class="field"><label for="key-name">Name</label><input id="key-name" maxlength="64" placeholder="e.g. my-laptop-claude-code" autocomplete="off"></div>
+      <div class="field"><label for="key-expiry">Expires</label>
+        <select id="key-expiry">
+          <option value="2160h" selected>90 days (default)</option>
+          <option value="720h">30 days</option>
+          <option value="4320h">180 days</option>
+        </select>
+      </div>
+      <div class="warn">⚠ The key is shown once and cannot be retrieved later.</div>
+      <div class="err" id="create-err"></div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" data-close="create-overlay">Cancel</button>
+        <button class="btn btn-primary" id="create-submit">Create key</button>
+      </div>
+    </div>
+
+    <div id="reveal-step" class="hidden">
+      <h3>Your new API key</h3>
+      <div class="hint">Copy it now. This is the only time it will be displayed.</div>
+      <div class="secret">
+        <div class="lbl">API key</div>
+        <code id="reveal-key">••••••••••••••••••••</code>
+        <button class="secret-show" id="reveal-show" type="button" aria-pressed="false">Show</button>
+        <button class="secret-copy" id="reveal-copy" type="button" aria-label="Copy API key" title="Copy"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="13" rx="2"></rect><path d="M16 8V5a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h2"></path></svg></button>
+        <div class="warn">⚠ Do not share it or commit it to a repository.</div>
+      </div>
+      <div class="key-success">
+        <strong>Congratulations — you’re ready to use EnMaaS.</strong>
+        Start using your key with your local tools. Come back anytime to review your usage in the <a href="/account?tab=usage">My usage tab</a>, or <a href="/welcome" target="_blank" rel="noopener">see how to set up your tools ↗</a>.
+      </div>
+      <div class="saved"><input type="checkbox" id="reveal-saved"><label for="reveal-saved">I've saved this key in a safe place</label></div>
+      <div class="modal-actions"><button class="btn btn-primary" id="reveal-done" disabled>Done</button></div>
+    </div>
+  </div>
+</div>
+
+<!-- Revoke confirm -->
+<div class="overlay" id="revoke-overlay">
+  <div class="modal" style="max-width:440px">
+    <button class="close" data-close="revoke-overlay">×</button>
+    <h3>Revoke key?</h3>
+    <div class="hint" id="revoke-copy">This cannot be undone. Tools using this key will stop working immediately.</div>
+    <div class="err" id="revoke-err"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" data-close="revoke-overlay">Cancel</button>
+      <button class="btn btn-danger" id="revoke-confirm">Revoke key</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="pricing-overlay">
+  <div class="modal pricing-modal">
+    <button class="close" data-close="pricing-overlay">×</button>
+    <h3>Model pricing</h3>
+    <div class="hint">Public EnMaaS rates per million tokens. Free hosted models are highlighted.</div>
+    <div class="pricing-table" id="account-pricing-body"><div class="loading"><span class="spinner"></span>Loading pricing…</div></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(function () {
+  var state = {tab:'usage', range:'mtd', from:'', to:'', keys:[], models:[], overview:null, revokeId:'', animateUsage:true, modelMetric:'cost', splitMetric:'cost', tableSort:{key:'cost',dir:'desc'}};
+  var COLORS = ['#4da0f8','#eba830','#a88cf8','#38d4c2','#e8554e','#f778ba','#b8d94a','#6e7bf2','#b07a48','#ff8c69','#79c0ff','#d2a8ff','#56d4dd','#e3b341','#8090a8'];
+
+  function $(id){ return document.getElementById(id); }
+  function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g,function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+  function money(v){ var n=Number(v||0); return '$'+(n>=1000?n.toLocaleString(undefined,{maximumFractionDigits:0}):n.toFixed(2)); }
+  // Sub-cent spend is common for single requests against cheap models. Keep
+  // two decimals for normal amounts, but never render a real cost as "$0.00".
+  function preciseMoney(v){
+    var n=Number(v||0), a=Math.abs(n);
+    if(a>0&&a<0.01) return '$'+n.toFixed(4);
+    if(a>0&&a<1) return '$'+n.toFixed(3);
+    return money(n);
+  }
+  function compact(v){ var n=Number(v||0); if(n>=1e9)return (n/1e9).toFixed(1)+'B'; if(n>=1e6)return (n/1e6).toFixed(1)+'M'; if(n>=1e3)return (n/1e3).toFixed(1)+'K'; return String(Math.round(n)); }
+  function when(iso){ if(!iso)return '—'; var d=new Date(iso); if(isNaN(d))return '—';
+    var diff=(Date.now()-d.getTime())/1000;
+    if(diff<60)return 'just now'; if(diff<3600)return Math.floor(diff/60)+'m ago';
+    if(diff<86400)return Math.floor(diff/3600)+'h ago'; if(diff<86400*7)return Math.floor(diff/86400)+'d ago';
+    return d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}); }
+  function dateOnly(iso){ if(!iso)return '—'; var d=new Date(iso); if(isNaN(d))return '—';
+    return d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}); }
+  function toast(msg, isErr){ var t=$('toast'); t.textContent=msg; t.className='toast show'+(isErr?' err':''); clearTimeout(t._t); t._t=setTimeout(function(){t.className='toast';},2600); }
+
+  function openPricing(){
+    $('pricing-overlay').className='overlay show';
+    var body=$('account-pricing-body');
+    body.innerHTML='<div class="loading"><span class="spinner"></span>Loading pricing…</div>';
+    fetch('/api/v1/pricing?public=1',{credentials:'same-origin'}).then(function(r){
+      if(!r.ok) throw new Error('HTTP '+r.status);
+      return r.json();
+    }).then(function(data){
+      var models=(data.models||[]).slice().sort(function(a,b){
+        var af=(+a.input_cost_per_mtok||0)+(+a.output_cost_per_mtok||0)===0;
+        var bf=(+b.input_cost_per_mtok||0)+(+b.output_cost_per_mtok||0)===0;
+        return (af===bf?String(a.model).localeCompare(String(b.model)):(af?-1:1));
+      });
+      if(!models.length){ body.innerHTML='<div class="empty">No public rates available.</div>'; return; }
+      body.innerHTML='<table><thead><tr><th>Model</th><th>Provider</th><th>Input / 1M</th><th>Output / 1M</th><th>Status</th></tr></thead><tbody>'+models.map(function(m){
+        var free=(+m.input_cost_per_mtok||0)+(+m.output_cost_per_mtok||0)===0;
+        return '<tr><td class="mono">'+esc(m.model)+'</td><td>'+esc(m.provider||'—')+'</td><td>'+pricingValue(m.input_cost_per_mtok,free)+'</td><td>'+pricingValue(m.output_cost_per_mtok,free)+'</td><td>'+(free?'<span class="pricing-free">FREE</span>':'Public rate')+'</td></tr>';
+      }).join('')+'</tbody></table>';
+    }).catch(function(e){ body.innerHTML='<div class="err">Could not load pricing ('+esc(e.message)+').</div>'; });
+  }
+  function pricingValue(value, free){
+    var n=Number(value||0);
+    return n>0 ? '$'+n.toLocaleString(undefined,{maximumFractionDigits:3}) : (free?'<span class="pricing-free">$0</span>':'—');
+  }
+  $('pricing-open').onclick=openPricing;
+
+  function api(url, opts){
+    opts = opts || {};
+    opts.credentials='same-origin';
+    if(opts.body){ opts.headers={'Content-Type':'application/json'}; opts.body=JSON.stringify(opts.body); }
+    return fetch(url, opts).then(function(r){
+      if(r.status===401){ location.href='/login'; throw new Error('auth'); }
+      if(!r.ok){ return r.text().then(function(t){ throw new Error(t||('HTTP '+r.status)); }); }
+      if(r.status===204) return null;
+      return r.json();
+    });
+  }
+
+  /* ---------------- tabs ---------------- */
+  function setTab(tab, push){
+    state.tab = tab === 'keys' ? 'keys' : 'usage';
+    $('tab-usage').className = 'tab' + (state.tab==='usage'?' on':'');
+    $('tab-keys').className = 'tab' + (state.tab==='keys'?' on':'');
+    $('view-usage').className = state.tab==='usage' ? '' : 'hidden';
+    $('view-keys').className = state.tab==='keys' ? '' : 'hidden';
+    if(push !== false){
+      var url = new URL(location.href); url.searchParams.set('tab', state.tab);
+      if(state.tab!=='keys') url.searchParams.delete('first');
+      history.replaceState(null,'',url.pathname+url.search);
+    }
+    if(state.tab==='keys') loadKeys();
+    if(state.tab==='usage') { state.animateUsage=true; loadUsage(); }
+  }
+  $('tab-usage').onclick=function(){ setTab('usage'); };
+  $('tab-keys').onclick=function(){ setTab('keys'); };
+  $('recent-refresh').onclick=function(){ loadRecent(); };
+  document.querySelectorAll('[data-model-metric]').forEach(function(btn){
+    btn.onclick=function(){
+      state.modelMetric=this.getAttribute('data-model-metric') || 'cost';
+      document.querySelectorAll('[data-model-metric]').forEach(function(b){ b.classList.toggle('on',b===btn); });
+      renderModels('model');
+    };
+  });
+  document.querySelectorAll('[data-split-metric]').forEach(function(btn){
+    btn.onclick=function(){
+      state.splitMetric=this.getAttribute('data-split-metric') || 'cost';
+      document.querySelectorAll('[data-split-metric]').forEach(function(b){ b.classList.toggle('on',b===btn); });
+      renderModels('split');
+    };
+  });
+  document.querySelectorAll('[data-table-sort]').forEach(function(th){
+    th.classList.add('sortable');
+    th.onclick=function(){
+      var key=this.getAttribute('data-table-sort');
+      if(state.tableSort.key===key) state.tableSort.dir=state.tableSort.dir==='desc'?'asc':'desc';
+      else { state.tableSort.key=key; state.tableSort.dir='desc'; }
+      renderModelTable();
+    };
+  });
+
+  /* ---------------- identity ---------------- */
+  function loadWho(){
+    return api('/api/v1/whoami').then(function(d){
+      $('who-name').textContent = d.display_name || d.user || '—';
+      var parts=[]; if(d.isSuperAdmin)parts.push('super admin'); else if(d.isAdmin)parts.push('admin');
+      if(d.quota && typeof d.quota.limit_usd === 'number' && d.quota.limit_usd>0) parts.push('budget $'+Math.round(d.quota.limit_usd));
+      $('who-sub').textContent = parts.join(' · ');
+      if(d.quota) state.quota=d.quota;
+      // Workspace links mirror the role-gated tabs on every other page:
+      // everyone has this personal page; managers get My team; admins get
+      // the org-wide usage page; super admins also get the operator pages.
+      if(d.isManager || d.isSuperAdmin) $('nav-team').style.display='';
+      if(d.isAdmin || d.isSuperAdmin) $('nav-org').style.display='';
+      if(d.isSuperAdmin){
+        $('nav-routing').style.display='';
+        $('nav-admin').style.display='';
+      }
+    }).catch(function(){});
+  }
+
+  /* ---------------- usage ---------------- */
+  function loadUsage(){
+    $('usage-sub').textContent = rangeLabel() + ' · updated ' + new Date().toLocaleTimeString();
+    api('/api/v1/me/usage/summary?'+rangeQuery()).then(function(d){
+      state.overview = d.overview || {};
+      var q = d.quota || state.quota;
+      var o = state.overview;
+      $('kpi-spend').textContent = preciseMoney(o.total_cost_usd);
+      $('kpi-requests').textContent = compact(o.total_requests);
+      $('kpi-tokens').textContent = compact(o.total_tokens);
+      if(q && typeof q.limit_usd === 'number' && q.limit_usd>0){
+        var pct = Math.round((q.spent_usd||0)/q.limit_usd*100);
+        $('kpi-budget').className = 'kpi-value ' + (pct > 100 ? 'budget-over' : 'budget-ok');
+        $('kpi-budget-bar').className = pct > 100 ? 'over' : '';
+        var budgetWidth = Math.min(100, pct);
+        if(state.animateUsage){
+          $('kpi-budget').textContent = '0%';
+          setBudgetColor($('kpi-budget'), 0, pct);
+          $('kpi-budget-bar').style.width = '0%';
+          animateBudget('kpi-budget', 0, pct, 1100);
+          animateWidth('kpi-budget-bar', budgetWidth, 1100);
+        } else {
+          $('kpi-budget').textContent = pct+'%';
+          setBudgetColor($('kpi-budget'), pct, pct);
+          $('kpi-budget-bar').style.width = budgetWidth+'%';
+        }
+        $('kpi-budget-note').textContent = money(q.spent_usd)+' of '+money(q.limit_usd);
+      } else {
+        $('kpi-budget').textContent = '—';
+        $('kpi-budget-note').textContent = 'no dollar budget configured';
+        $('kpi-budget-bar').className = '';
+        $('kpi-budget-bar').style.width = '0%';
+      }
+    }).catch(function(){ toast('Could not load usage', true); });
+
+    api('/api/v1/me/usage/models?'+rangeQuery()).then(function(rows){
+      state.models = rows || [];
+      renderModels();
+    }).catch(function(){
+      $('model-rows').innerHTML='<tr><td colspan="6"><div class="empty">Could not load model usage.</div></td></tr>';
+    });
+
+    loadRecent();
+  }
+
+  function loadRecent(){
+    var btn=$('recent-refresh');
+    if(btn){ btn.classList.add('spinning'); btn.disabled=true; }
+    return api('/api/v1/me/usage/recent?limit=20').then(function(rows){
+      renderRecent(rows || []);
+    }).catch(function(){
+      $('recent-rows').innerHTML='<tr><td colspan="11"><div class="empty">Could not load transactions.</div></td></tr>';
+    }).then(function(){
+      if(btn){ btn.classList.remove('spinning'); btn.disabled=false; }
+    });
+  }
+
+  function rangeLabel(){
+    if(state.range === 'custom' && state.from && state.to){
+      return fmtRangeDate(state.from) + ' – ' + fmtRangeDate(state.to);
+    }
+    return {mtd:'Month to date','24h':'Last 24 hours','7d':'Last 7 days','30d':'Last 30 days',
+      '90d':'Last 90 days','365d':'Last 12 months'}[state.range] || 'Month to date';
+  }
+
+  function fmtRangeDate(value){
+    var d = new Date(value + 'T00:00:00');
+    if(isNaN(d)) return value;
+    return d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+  }
+
+  function rangeQuery(){
+    if(state.range === 'custom' && state.from && state.to){
+      return 'range=custom&from='+encodeURIComponent(state.from)+'&to='+encodeURIComponent(state.to);
+    }
+    return 'range='+encodeURIComponent(state.range);
+  }
+
+  function isoDate(d){
+    var y=d.getFullYear(), m=String(d.getMonth()+1).padStart(2,'0'), day=String(d.getDate()).padStart(2,'0');
+    return y+'-'+m+'-'+day;
+  }
+
+  function renderModels(changed){
+    var metric=state.modelMetric;
+    function value(r){ return metric==='tokens' ? (r.total_tokens||0) : metric==='requests' ? (r.requests||0) : (r.cost_usd||0); }
+    function display(v){ return metric==='cost' ? preciseMoney(v) : compact(v); }
+    var rows = state.models.slice().sort(function(a,b){ return value(b)-value(a); });
+    var total = rows.reduce(function(s,r){ return s+value(r); },0);
+    if(changed !== 'split'){
+      $('model-total-label').textContent=metric;
+      if(state.animateUsage) animateNumber('model-total', 0, total, 1100, display);
+      else $('model-total').textContent = display(total);
+    }
+
+    // Spend-by-model donut
+    var top = rows.filter(function(r){ return value(r)>0; }).slice(0,6);
+    var rest = rows.filter(function(r){ return value(r)>0; }).slice(6);
+    if(rest.length){
+      top.push({model:'Other ('+rest.length+')', cost_usd:rest.reduce(function(s,r){return s+(r.cost_usd||0);},0), total_tokens:rest.reduce(function(s,r){return s+(r.total_tokens||0);},0), requests:rest.reduce(function(s,r){return s+(r.requests||0);},0), _other:true});
+    }
+    var segs=[], acc=0, legend='';
+    top.forEach(function(r,i){
+      var pct = total>0 ? (value(r)/total*100) : 0;
+      var color = r._other ? '#5b6b82' : COLORS[i%COLORS.length];
+      segs.push(color+' '+acc.toFixed(2)+'% '+(acc+pct).toFixed(2)+'%');
+      acc += pct;
+      legend += '<div class="legend-row"><span class="sw" style="background:'+color+'"></span>'+
+        '<span class="nm" title="'+esc(r.model)+'">'+esc(r.model)+'</span><span class="val">'+display(value(r))+' · '+Math.round(pct)+'%</span></div>';
+    });
+    if(!segs.length) segs.push('var(--c3) 0 100%');
+    if(changed !== 'split'){
+      if(state.animateUsage) animateDonut('model-donut', segs, 800);
+      else $('model-donut').style.background = 'conic-gradient('+segs.join(',')+')';
+      $('model-legend').innerHTML = legend || '<div class="legend-row"><span class="nm">No spend in this period.</span></div>';
+    }
+
+    // Hosted vs frontier donut
+    var splitMetric=state.splitMetric;
+    function splitValue(r){ return splitMetric==='tokens' ? (r.total_tokens||0) : splitMetric==='requests' ? (r.requests||0) : (r.cost_usd||0); }
+    function splitDisplay(v){ return splitMetric==='cost' ? preciseMoney(v) : compact(v); }
+    var splitTotal = rows.reduce(function(s,r){ return s+splitValue(r); },0);
+    var hosted = rows.filter(function(r){ return r.hosted; }).reduce(function(s,r){return s+splitValue(r);},0);
+    var frontier = Math.max(splitTotal-hosted,0);
+    var hp = splitTotal>0 ? Math.round(hosted/splitTotal*100) : 0;
+    var splitHasData = splitTotal > 0;
+    var splitSegs = splitHasData ? ['#3dcc6e 0 '+hp+'%', '#a88cf8 '+hp+'% 100%'] : ['var(--c3) 0 100%'];
+    if(changed !== 'model'){
+      if(state.animateUsage && splitHasData) {
+        animateDonut('split-donut', splitSegs, 800);
+        animateNumber('split-pct', 0, hp, 800, function(v){ return Math.round(v)+'%'; });
+      } else {
+        $('split-donut').style.background = 'conic-gradient('+splitSegs.join(',')+')';
+        $('split-pct').textContent = hp+'%';
+      }
+      $('split-legend').innerHTML =
+        '<div class="legend-row"><span class="sw" style="background:#3dcc6e"></span><span class="nm">Hosted (EnMaaS)</span><span class="val">'+splitDisplay(hosted)+' · '+hp+'%</span></div>'+
+        '<div class="legend-row"><span class="sw" style="background:#a88cf8"></span><span class="nm">Frontier (vendor)</span><span class="val">'+splitDisplay(frontier)+' · '+(splitHasData?100-hp:0)+'%</span></div>';
+    }
+
+    // Model detail has its own sort state, independent from either pie.
+    if(changed !== 'split') renderModelTable();
+  }
+
+  function renderModelTable(){
+    var rows=state.models.slice(), sort=state.tableSort;
+    if(!rows.length){
+      $('model-rows').innerHTML='<tr><td colspan="6"><div class="empty"><b>No usage yet</b>Create a key and send a request to see your spend here.</div></td></tr>';
+      return;
+    }
+    var metric=function(r){
+      if(sort.key==='requests') return r.requests||0;
+      if(sort.key==='tokens') return r.total_tokens||0;
+      if(sort.key==='share'||sort.key==='cost') return r.cost_usd||0;
+      return String(r.model||'').toLowerCase();
+    };
+    rows.sort(function(a,b){ var av=metric(a),bv=metric(b); var c=typeof av==='string'?av.localeCompare(bv):av-bv; return sort.dir==='asc'?c:-c; });
+    var total=rows.reduce(function(s,r){return s+(r.cost_usd||0);},0);
+    $('model-rows').innerHTML=rows.map(function(r){
+      var share=total>0?Math.round((r.cost_usd||0)/total*100):0;
+      return '<tr><td>'+modelChip(r.model)+'</td>'+ 
+        '<td><span class="pill '+(r.hosted?'hosted':'frontier')+'">'+(r.hosted?'Hosted':'Frontier')+'</span></td>'+
+        '<td class="num">'+compact(r.requests)+'</td>'+ 
+        '<td class="num">'+compact(r.total_tokens)+'</td>'+ 
+        '<td class="num">'+preciseMoney(r.cost_usd)+'</td>'+ 
+        '<td class="num">'+share+'%</td></tr>';
+    }).join('');
+  }
+
+  function animateNumber(id, from, to, duration, format){
+    var el=$(id), start=performance.now();
+    if(el._animationFrame) cancelAnimationFrame(el._animationFrame);
+    function tick(now){
+      var p=Math.min(1,(now-start)/duration), eased=p;
+      el.textContent=format(from+(to-from)*eased);
+      if(p<1) el._animationFrame=requestAnimationFrame(tick); else el._animationFrame=null;
+    }
+    el._animationFrame=requestAnimationFrame(tick);
+  }
+
+  function animateWidth(id, to, duration){
+    var el=$(id), start=performance.now();
+    if(el._animationFrame) cancelAnimationFrame(el._animationFrame);
+    // Width is driven frame-by-frame below; the CSS transition would add a
+    // second, lagging animation and make the bar trail the percentage.
+    el.style.transition='none';
+    el.style.width='0%';
+    function tick(now){
+      var p=Math.min(1,(now-start)/duration), eased=1-Math.pow(1-p,3);
+      el.style.width=(to*eased)+'%';
+      if(p<1) el._animationFrame=requestAnimationFrame(tick);
+      else { el.style.width=to+'%'; el._animationFrame=null; }
+    }
+    el._animationFrame=requestAnimationFrame(tick);
+  }
+
+  function setBudgetColor(el, value, target){
+    if(target > 100){ el.style.color='var(--red)'; return; }
+    var p=Math.max(0,Math.min(1,value/100));
+    var r=Math.round(61+(235-61)*p), g=Math.round(204+(168-204)*p), b=Math.round(110+(48-110)*p);
+    el.style.color='rgb('+r+','+g+','+b+')';
+  }
+
+  function animateBudget(id, from, to, duration){
+    var el=$(id), start=performance.now(), reduced=window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if(el._animationFrame) cancelAnimationFrame(el._animationFrame);
+    if(reduced){ el.textContent=Math.round(to)+'%'; setBudgetColor(el,to,to); return; }
+    function tick(now){
+      var p=Math.min(1,(now-start)/duration), eased=1-Math.pow(1-p,3), value=from+(to-from)*eased;
+      // Keep the displayed integer behind the bar until the animation reaches
+      // the same endpoint; rounding would show 43% while the bar is still at
+      // roughly 42.5%.
+      el.textContent=(p < 1 ? Math.floor(value) : Math.round(to))+'%';
+      setBudgetColor(el,value,to);
+      if(p<1) el._animationFrame=requestAnimationFrame(tick); else el._animationFrame=null;
+    }
+    el._animationFrame=requestAnimationFrame(tick);
+  }
+
+  function animateDonut(id, segments, duration){
+    var el=$(id), start=performance.now();
+    var version=(el._animationVersion||0)+1;
+    el._animationVersion=version;
+    if(el._animationFrame) cancelAnimationFrame(el._animationFrame);
+    var reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if(reduced){
+      el.style.background='conic-gradient('+segments.join(',')+')';
+      return;
+    }
+    // Reveal the completed gradient progressively. Moving individual color
+    // stops lets the first slice snap to its final size in some browsers.
+    var finalGradient='conic-gradient('+segments.join(',')+')';
+    // Always begin empty, including when one of the values is exactly zero.
+    el.style.background='conic-gradient(var(--c3) 0 100%)';
+    function tick(now){
+      if(el._animationVersion!==version) return;
+      var p=Math.min(1,(now-start)/duration), revealed=(p*100).toFixed(2)+'%';
+      el.style.background='conic-gradient(transparent 0 '+revealed+', var(--c3) '+revealed+' 100%), '+finalGradient;
+      if(p<1) el._animationFrame=requestAnimationFrame(tick); else el._animationFrame=null;
+    }
+    el._animationFrame=requestAnimationFrame(tick);
+  }
+
+  var MODEL_PALETTE=['#58a6ff','#3fb950','#d29922','#bc8cff','#39d2c0','#f85149','#f778ba','#79c0ff','#7ee787','#ffa657','#a5d6ff','#ff7b72'];
+  function rgba(hex,a){
+    var n=parseInt(String(hex).replace('#',''),16);
+    return 'rgba('+((n>>16)&255)+','+((n>>8)&255)+','+(n&255)+','+a+')';
+  }
+  // Stable colour per model name, so the same model keeps its colour across
+  // the detail table and the recent feed.
+  function modelColor(model){
+    var s=String(model||''), h=0;
+    for(var i=0;i<s.length;i++) h=(h*31+s.charCodeAt(i))>>>0;
+    return MODEL_PALETTE[h%MODEL_PALETTE.length];
+  }
+  function modelChip(model){
+    if(!model) return '—';
+    var c=modelColor(model);
+    return '<span class="model-chip" style="color:'+c+';background:'+rgba(c,.12)+';border-color:'+rgba(c,.4)+'">'+
+      '<span class="mdot" style="background:'+c+'"></span>'+
+      '<span class="mname" title="'+esc(model)+'">'+esc(model)+'</span></span>';
+  }
+  function friendlyClient(ua){
+    if(!ua) return '';
+    var n=String(ua).toLowerCase();
+    if(n.indexOf('claude-cli')===0||n.indexOf('claude-code')===0) return 'Claude Code';
+    if(n.indexOf('codex-tui')===0||n.indexOf('codex/')===0) return 'Codex';
+    if(n==='opencode'||n.indexOf('opencode/')===0||n.indexOf('opencode-')===0||n.indexOf('opencode.')===0) return 'OpenCode';
+    if(n==='pi'||n.indexOf('pi/')===0||n.indexOf('pi-')===0||n.indexOf('pi.')===0||n.indexOf('pi ')===0) return 'Pi';
+    if(n.indexOf('charm-crush/')===0) return 'Charm-Crush';
+    if(n.indexOf('openai/')===0) return 'OpenAI';
+    if(n.indexOf('gemini-cli/')===0) return 'Gemini CLI';
+    if(n.indexOf('aider/')===0) return 'Aider';
+    if(n.indexOf('omp/')===0) return 'omp';
+    if(n.indexOf('curl/')===0) return 'curl';
+    return 'Other';
+  }
+  function clientColor(name){
+    return {'Claude Code':'#d29922','Codex':'#3fb950','OpenCode':'#58a6ff','Pi':'#bc8cff',
+      'Charm-Crush':'#f778ba','OpenAI':'#39d2c0','Gemini CLI':'#79c0ff','Aider':'#7ee787',
+      'omp':'#ffa657','curl':'#8090a8'}[name]||'#38d4c2';
+  }
+  var PROVIDER_COLORS={
+    'anthropic':'#d97757','openai':'#3fb950','azure':'#79c0ff',
+    'vertex':'#58a6ff','google':'#f2cc60','gemini':'#f2cc60','bedrock':'#7ee787',
+    'cb-glm':'#bc8cff','glm':'#bc8cff','zai':'#a371f7',
+    'cb-litellm':'#f778ba','litellm':'#f778ba',
+    'qwen':'#39d2c0','vllm':'#e3b341','ollama':'#ffa657','gateway':'#8b949e'
+  };
+  var PROVIDER_PALETTE=['#58a6ff','#3fb950','#d29922','#bc8cff','#39d2c0','#f85149','#f778ba','#79c0ff','#7ee787','#ffa657','#a5d6ff','#ff7b72','#d97757','#e3b341'];
+  function providerColor(name){
+    var p=String(name||'').toLowerCase();
+    if(PROVIDER_COLORS[p]) return PROVIDER_COLORS[p];
+    // Unknown provider: stable colour from the name so it never changes
+    // between page loads and stays distinct from the curated mappings.
+    var h=0;
+    for(var i=0;i<p.length;i++) h=(h*31+p.charCodeAt(i))>>>0;
+    return PROVIDER_PALETTE[h%PROVIDER_PALETTE.length];
+  }
+  function statusMeta(code){
+    if(code===null||code===undefined) return {text:'—',cls:'',title:'unknown (recorded before status tracking)'};
+    if(code===0) return {text:'ERR',cls:'status-err',title:'no upstream response'};
+    var ok=code>=200&&code<300;
+    return {text:String(code),cls:ok?'status-ok':'status-err',title:ok?'success':'error response'};
+  }
+  function exact(n){
+    return Number(n||0).toLocaleString();
+  }
+
+  function renderRecent(rows){
+    if(!rows.length){
+       $('recent-rows').innerHTML='<tr><td colspan="11"><div class="empty"><b>No transactions yet</b>Requests appear here as soon as your tools use a key.</div></td></tr>';
+      return;
+    }
+    $('recent-rows').innerHTML = rows.map(function(e){
+      var st=statusMeta(e.status_code);
+      var client=friendlyClient(e.user_agent);
+      var clientLabel=client==='Other'&&e.user_agent ? e.user_agent : (client||'—');
+      var cCol=clientColor(client);
+      var pCol=providerColor(e.provider);
+      var input=e.prompt_tokens||0, output=e.completion_tokens||0;
+      var total=e.total_tokens||(input+output);
+      return '<tr>'+
+        '<td style="color:var(--t2)">'+when(e.timestamp)+'</td>'+
+        '<td>'+modelChip(e.model)+'</td>'+
+        '<td class="client-chip" style="color:'+cCol+'" title="'+esc(e.user_agent||clientLabel)+'">'+esc(clientLabel)+'</td>'+
+        '<td style="color:'+pCol+';font-weight:600">'+esc(e.provider||'—')+'</td>'+
+        '<td class="'+st.cls+'" title="'+esc(st.title)+'">'+st.text+'</td>'+
+        '<td class="num tok-in" title="'+exact(input)+' input tokens">'+compact(input)+'</td>'+
+        '<td class="num tok-out" title="'+exact(output)+' output tokens">'+compact(output)+'</td>'+
+        '<td class="num tok-cached" title="'+exact(e.cached_input_tokens)+' cached input tokens">'+compact(e.cached_input_tokens||0)+'</td>'+
+        '<td class="num tok-cache-write" title="'+exact(e.cache_creation_tokens)+' cache write tokens">'+compact(e.cache_creation_tokens||0)+'</td>'+
+        '<td class="num tok-total" title="'+exact(total)+' total tokens">'+compact(total)+'</td>'+
+        '<td class="num" style="color:var(--org);font-weight:600" title="'+esc('$'+Number(e.cost_usd||0).toFixed(6))+'">'+preciseMoney(e.cost_usd)+'</td></tr>';
+    }).join('');
+  }
+
+  /* ---------------- keys ---------------- */
+  function loadKeys(){
+    api('/api/v1/me/keys').then(function(d){
+      state.keys = (d && (d.data || d.keys)) || [];
+      renderKeys();
+    }).catch(function(){
+      $('key-rows').innerHTML='<tr><td colspan="7"><div class="empty">Could not load your keys.</div></td></tr>';
+    });
+  }
+
+  function statusOf(k){
+    var s=(k.status||'active').toLowerCase();
+    if(s==='revoked'||s==='expired') return s;
+    var exp=k.expirationDate ? new Date(k.expirationDate) : null;
+    if(exp && !isNaN(exp)){
+      if(exp.getTime() < Date.now()) return 'expired';
+      if(exp.getTime()-Date.now() < 14*86400*1000) return 'expiring';
+    }
+    return 'active';
+  }
+
+  function renderKeys(){
+    if(!state.keys.length){
+      $('key-rows').innerHTML='<tr><td colspan="7"><div class="empty"><b>No keys yet</b>Follow the EnMaaS onboarding process to get started. If onboarding is already complete, create a key here.<div style="margin-top:14px"><button class="btn btn-primary" onclick="document.getElementById(\'create-btn\').click()">Create key</button></div></div></td></tr>';
+      return;
+    }
+    state.keys.sort(function(a,b){ return new Date(b.creationDate||0)-new Date(a.creationDate||0); });
+    $('key-rows').innerHTML = state.keys.map(function(k){
+      var st=statusOf(k);
+      var label = st==='expiring'?'Expiring soon':st;
+      var action = (st==='active'||st==='expiring') && k.id
+        ? '<button class="btn btn-danger btn-sm" data-revoke="'+esc(k.id)+'" data-name="'+esc(k.name||'')+'">Revoke</button>' : '';
+      return '<tr>'+
+        '<td style="font-weight:600">'+esc(k.name||'—')+'</td>'+
+        '<td style="color:var(--t2)">'+esc(k.subscription||k.group||'—')+'</td>'+
+        '<td><span class="pill '+st+'">'+esc(label)+'</span></td>'+
+        '<td style="color:var(--t2)">'+when(k.creationDate||k.created_at)+'</td>'+
+        '<td style="color:var(--t2)">'+dateOnly(k.expirationDate)+'</td>'+
+        '<td style="color:var(--t2)">'+(k.lastUsedAt?when(k.lastUsedAt):'never')+'</td>'+
+        '<td style="text-align:right">'+action+'</td></tr>';
+    }).join('');
+    Array.prototype.forEach.call(document.querySelectorAll('[data-revoke]'), function(btn){
+      btn.onclick=function(){
+        state.revokeId=btn.getAttribute('data-revoke');
+        $('revoke-copy').textContent='Revoke “'+(btn.getAttribute('data-name')||'this key')+'”? Tools using it will stop working immediately. This cannot be undone.';
+        $('revoke-err').textContent='';
+        $('revoke-overlay').className='overlay show';
+      };
+    });
+  }
+
+  $('create-btn').onclick=function(){
+    $('create-step').className=''; $('reveal-step').className='hidden';
+    $('key-name').value=''; $('key-expiry').value='2160h'; $('create-err').textContent='';
+    $('create-overlay').className='overlay show'; $('key-name').focus();
+  };
+
+  $('create-submit').onclick=function(){
+    var name=$('key-name').value.trim();
+    if(!name){ $('create-err').textContent='Give the key a name.'; return; }
+    var btn=this; btn.disabled=true;
+    api('/api/v1/me/keys',{method:'POST',body:{name:name,expiresIn:$('key-expiry').value}}).then(function(k){
+      $('reveal-key').textContent = '••••••••••••••••••••';
+      $('reveal-key').dataset.shown = 'false';
+      $('reveal-show').textContent = 'Show';
+      $('reveal-show').setAttribute('aria-pressed','false');
+      $('create-step').className='hidden'; $('reveal-step').className='';
+      $('reveal-saved').checked=false; $('reveal-done').disabled=true;
+      state.lastKey = k.key||'';
+      loadKeys();
+    }).catch(function(err){
+      $('create-err').textContent = (err.message||'Could not create the key.').replace(/^maas-api[^:]*:\s*/,'').slice(0,200);
+    }).then(function(){ btn.disabled=false; });
+  };
+
+  $('reveal-saved').onchange=function(){ $('reveal-done').disabled=!this.checked; };
+  $('reveal-show').onclick=function(){
+    var shown=$('reveal-key').dataset.shown==='true';
+    $('reveal-key').textContent=shown ? '••••••••••••••••••••' : (state.lastKey || '');
+    $('reveal-key').dataset.shown=shown ? 'false' : 'true';
+    this.textContent=shown ? 'Show' : 'Hide';
+    this.setAttribute('aria-pressed',shown ? 'false' : 'true');
+  };
+  $('reveal-copy').onclick=function(){
+    var v=state.lastKey || '';
+    navigator.clipboard.writeText(v).then(function(){ toast('Key copied'); }).catch(function(){
+      var ta=document.createElement('textarea'); ta.value=v; document.body.appendChild(ta); ta.select();
+      document.execCommand('copy'); ta.remove(); toast('Key copied');
+    });
+  };
+  $('reveal-done').onclick=function(){
+    $('reveal-key').textContent='••••••••••••••••••••';
+    $('reveal-key').dataset.shown='false';
+    $('reveal-show').textContent='Show';
+    $('reveal-show').setAttribute('aria-pressed','false');
+    state.lastKey='';
+    $('create-overlay').className='overlay';
+    toast('Key created');
+  };
+
+  $('revoke-confirm').onclick=function(){
+    var btn=this; btn.disabled=true;
+    api('/api/v1/me/keys/'+encodeURIComponent(state.revokeId),{method:'DELETE'}).then(function(){
+      $('revoke-overlay').className='overlay';
+      toast('Key revoked'); loadKeys();
+    }).catch(function(){ $('revoke-err').textContent='Could not revoke the key.'; })
+      .then(function(){ btn.disabled=false; });
+  };
+
+  /* ---------------- copy / close ---------------- */
+  Array.prototype.forEach.call(document.querySelectorAll('[data-close]'),function(b){
+    b.onclick=function(){ $(b.getAttribute('data-close')).className='overlay'; };
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('.overlay'),function(o){
+    o.addEventListener('click',function(e){ if(e.target===o) o.className='overlay'; });
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('[data-copy]'),function(b){
+    b.onclick=function(){ navigator.clipboard.writeText(b.getAttribute('data-copy')).then(function(){toast('Copied');}); };
+  });
+
+  $('range').onchange=function(){
+    if(this.value === 'custom'){
+      $('custom-range').classList.remove('hidden');
+      $('range-err').textContent='';
+      if(!$('range-from').value || !$('range-to').value){
+        var today=new Date(), start=new Date(); start.setDate(start.getDate()-29);
+        $('range-from').value=isoDate(start);
+        $('range-to').value=isoDate(today);
+      }
+      return;
+    }
+    state.range=this.value;
+    $('custom-range').classList.add('hidden');
+    $('range-err').textContent='';
+    loadUsage();
+  };
+
+  function applyCustomRange(){
+    var from=$('range-from').value, to=$('range-to').value;
+    if(!from || !to){ $('range-err').textContent='Choose both a start and end date.'; return; }
+    if(from > to){ $('range-err').textContent='The start date must be before the end date.'; return; }
+    var today=isoDate(new Date());
+    if(to > today){ $('range-err').textContent='The end date cannot be in the future.'; return; }
+    $('range-err').textContent='';
+    state.range='custom'; state.from=from; state.to=to;
+    loadUsage();
+  }
+  $('range-apply').onclick=applyCustomRange;
+  $('range-from').onchange=function(){
+    $('range-to').min=this.value;
+    if($('range-to').value && $('range-to').value < this.value) $('range-to').value=this.value;
+  };
+
+  /* ---------------- boot ---------------- */
+  var params=new URLSearchParams(location.search);
+  if(params.get('first')==='1'){ $('first-banner').className='banner'; history.replaceState(null,'',location.pathname+'?tab=keys'); }
+  var initialRange=params.get('range');
+  if(initialRange){
+    if(initialRange==='custom' && params.get('from') && params.get('to')){
+      state.range='custom'; state.from=params.get('from'); state.to=params.get('to');
+      $('range').value='custom'; $('custom-range').classList.remove('hidden');
+      $('range-from').value=state.from; $('range-to').value=state.to;
+    } else if(['mtd','24h','7d','30d','90d','365d'].indexOf(initialRange)>=0){
+      state.range=initialRange; $('range').value=initialRange;
+    }
+  }
+  loadWho();
+  setTab((params.get('tab')==='keys'||params.get('first')==='1')?'keys':'usage', false);
+  document.documentElement.classList.remove('preload-keys');
+})();
+</script>
+</body>
+</html>

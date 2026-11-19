@@ -1,0 +1,14 @@
+services:
+  ldap-sync:
+    build:
+      context: ../..
+      dockerfile: deploy/ldap-sync/Dockerfile
+    env_file:
+      - .env
+    volumes:
+      - "${LDAP_PASSWORD_FILE_HOST:?set LDAP_PASSWORD_FILE_HOST in .env}:/run/secrets/ldap_key:ro"
+      - "${LDAP_CA_CERT_HOST:?set LDAP_CA_CERT_HOST in .env}:/run/secrets/ldap_ca.pem:ro"
+      - "${DATABASE_URL_FILE_HOST:?set DATABASE_URL_FILE_HOST in .env}:/run/secrets/database_url:ro"
+      - "${LDAP_SYNC_OUTPUT_DIR_HOST:?set LDAP_SYNC_OUTPUT_DIR_HOST in .env}:/var/lib/ldap-sync"
+    restart: unless-stopped
+    stop_grace_period: 30s

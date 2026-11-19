@@ -1,0 +1,1216 @@
+package storage
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"log/slog"
+	"math"
+	"sort"
+	"time"
+
+	_ "github.com/lib/pq"
+
+	"github.com/redhat-et/pricetag-metering/internal/metrics"
+)
+
+// Hourly rollup maintenance and the one-time backfill (Phase 3 of
+// docs/dashboard-scaling-plan.md). Design notes that matter:
+//
+//   - The rollup is upserted inside each event's insert transaction, by
+//     BOTH insert sites (InsertEvent and RecordQuotaDenial). No async
+//     worker, no window where raw and rollup disagree while being read.
+//   - The backfill is resumable across restarts via rollup_meta
+//     watermarks, and idempotent: costs fill only NULL rows; the rollup
+//     rebuild rewrites whole hours with values recomputed from raw
+//     (ON CONFLICT DO UPDATE = EXCLUDED), so a crash mid-rebuild leaves
+//     a re-runnable, never-double-counted state. Stages run in order
+//     (all costs, then all hours, then recent hours, then ready) — the
+//     ready flag can never land on a half-filled table.
+//   - Denials (zero-usage 429 rows) count in `requests` everywhere —
+//     inserts, rebuild and parity — per the plan's explicit parity
+//     definition.
+//   - group_name is coalesced to '' in the rollup key; the live inserts
+//     already store '' (Go's empty string), so live and backfilled rows
+//     key identically.
+
+// execer lets insert paths and helpers run on either a *sql.DB or the
+// *sql.Tx a caller opened — the rollup must join the caller's tx.
+type execer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+const upsertRollupSQL = `
+	INSERT INTO usage_hourly (hour, username, group_name, model, provider,
+		requests, prompt_tokens, completion_tokens, total_tokens,
+		cached_input_tokens, cache_creation_tokens, cost_usd)
+	VALUES (date_trunc('hour', $1::timestamptz), $2, $3, $4, $5,
+		$6::bigint, $7::bigint, $8::bigint, $9::bigint, $10::bigint, $11::bigint, $12::numeric)
+	ON CONFLICT (hour, username, group_name, model, provider) DO UPDATE SET
+		requests = usage_hourly.requests + EXCLUDED.requests,
+		prompt_tokens = usage_hourly.prompt_tokens + EXCLUDED.prompt_tokens,
+		completion_tokens = usage_hourly.completion_tokens + EXCLUDED.completion_tokens,
+		total_tokens = usage_hourly.total_tokens + EXCLUDED.total_tokens,
+		cached_input_tokens = usage_hourly.cached_input_tokens + EXCLUDED.cached_input_tokens,
+		cache_creation_tokens = usage_hourly.cache_creation_tokens + EXCLUDED.cache_creation_tokens,
+		cost_usd = usage_hourly.cost_usd + EXCLUDED.cost_usd`
+
+const upsertToolRollupSQL = `
+	INSERT INTO usage_tool_hourly (hour, username, group_name, model, provider, tool,
+		requests, prompt_tokens, completion_tokens, total_tokens,
+		cached_input_tokens, cache_creation_tokens, cost_usd)
+	VALUES (date_trunc('hour', $1::timestamptz), $2, $3, $4, $5, $6,
+		$7::bigint, $8::bigint, $9::bigint, $10::bigint, $11::bigint, $12::bigint, $13::numeric)
+	ON CONFLICT (hour, username, group_name, model, provider, tool) DO UPDATE SET
+		requests = usage_tool_hourly.requests + EXCLUDED.requests,
+		prompt_tokens = usage_tool_hourly.prompt_tokens + EXCLUDED.prompt_tokens,
+		completion_tokens = usage_tool_hourly.completion_tokens + EXCLUDED.completion_tokens,
+		total_tokens = usage_tool_hourly.total_tokens + EXCLUDED.total_tokens,
+		cached_input_tokens = usage_tool_hourly.cached_input_tokens + EXCLUDED.cached_input_tokens,
+		cache_creation_tokens = usage_tool_hourly.cache_creation_tokens + EXCLUDED.cache_creation_tokens,
+		cost_usd = usage_tool_hourly.cost_usd + EXCLUDED.cost_usd`
+
+const (
+	metaCostWatermark     = "cost_backfill_max_id"
+	metaRollupWatermark   = "rollup_rebuilt_through_hour" // last fully rebuilt hour, inclusive
+	metaRollupsReady      = "rollups_ready"
+	metaParityHealthy     = "parity_healthy"
+	metaParityCheckedAt   = "parity_checked_at"
+	metaToolRollupsReady  = "tool_rollups_ready"
+	metaToolRollupVersion = "tool_rollup_normalization_version"
+	// Bump when dashboardToolSQL normalization changes. Existing deployments
+	// otherwise keep serving a ready table built with the old classifier.
+	toolRollupVersion = "5"
+	costBackfillStep  = 50000
+)
+
+// ---- Hour locks (part B) ----
+//
+// A periodic refreshRecentHours rewrites an hour from raw and, done naively,
+// can overwrite a live insert-path upsert that commits while the rebuild's
+// aggregate snapshot was already taken (the rebuild's INSERT..SELECT never
+// saw the row; its DELETE+INSERT then drops the live +1). One-shot during
+// part A's backfill and parity-gated; continuous in part B with reads
+// depending on it, so both writers on an hour bucket must serialize on an
+// advisory transaction lock keyed to that bucket:
+//
+//   - upsertRollup takes the lock for its own hour, inside the event's tx;
+//   - rebuild/refresh take the locks for their whole [from,to) range, in
+//     ascending hour order, inside their tx.
+//
+// Deadlock-freedom: upserters hold exactly one hour lock; refreshers
+// acquire multiple strictly ascending. A cycle would need some upser to
+// wait for a lock a refresher holds while the refresher waits further up
+// the same ascending chain past that upser's single lock — impossible.
+// The bucket is rendered in UTC explicitly ("AT TIME ZONE 'UTC'") so the
+// key can never depend on a session TimeZone; both statements below must
+// keep the identical render expression (a test guards the drift).
+
+const upsertHourLockSQL = `SELECT pg_advisory_xact_lock(hashtext('usage_hourly:' || to_char(date_trunc('hour', $1::timestamptz) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24')))`
+const upsertToolHourLockSQL = `SELECT pg_advisory_xact_lock(hashtext('usage_tool_hourly:' || to_char(date_trunc('hour', $1::timestamptz) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24')))`
+
+const rebuildHourLockSQL = `SELECT pg_advisory_xact_lock(hashtext('usage_hourly:' || to_char(h AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24'))) FROM generate_series($1::timestamptz, $2::timestamptz - interval '1 hour', interval '1 hour') h ORDER BY h`
+const rebuildToolHourLockSQL = `SELECT pg_advisory_xact_lock(hashtext('usage_tool_hourly:' || to_char(h AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24'))) FROM generate_series($1::timestamptz, $2::timestamptz - interval '1 hour', interval '1 hour') h ORDER BY h`
+
+// upsertRollup adds one event's contribution to its hour bucket. costUSD
+// is the NUMERIC text the insert statement returned (or "0" for denial
+// rows) — passing it as text keeps exact NUMERIC semantics end to end.
+// Must be called inside a transaction (both insert sites do): the hour
+// lock is transaction-scoped and would be a no-op on the autocommit pool.
+func upsertRollup(ctx context.Context, ex execer, ts time.Time, username, group, model, provider string,
+	tool string, requests, prompt, completion, total, cached, cacheCreation int, costUSD string) error {
+	if _, err := ex.ExecContext(ctx, upsertHourLockSQL, ts); err != nil {
+		return err
+	}
+	_, err := ex.ExecContext(ctx, upsertRollupSQL,
+		ts, username, group, model, provider,
+		requests, prompt, completion, total, cached, cacheCreation, costUSD)
+	if err != nil {
+		return err
+	}
+	if _, err := ex.ExecContext(ctx, upsertToolHourLockSQL, ts); err != nil {
+		return err
+	}
+	_, err = ex.ExecContext(ctx, upsertToolRollupSQL,
+		ts, username, group, model, provider, tool,
+		requests, prompt, completion, total, cached, cacheCreation, costUSD)
+	return err
+}
+
+// costBackfillSQL fills cost_usd for one id window. The inner SELECT uses
+// costUSDExpr verbatim with the canonical e/p aliases; the UPDATE target
+// carries a different alias (u) so nothing shadows or drifts.
+var costBackfillSQL = fmt.Sprintf(`
+	UPDATE usage_events u SET cost_usd = c.calc
+	FROM (
+		SELECT e.id, %s AS calc
+		FROM usage_events e
+		LEFT JOIN model_pricing p ON p.model = e.model
+		WHERE e.id > $1 AND e.id <= $2 AND e.cost_usd IS NULL
+	) c
+	WHERE u.id = c.id`, costUSDExpr)
+
+// rebuildHourSQL rewrites one hour's rollup rows from raw. Overwriting
+// with EXCLUDED (not adding) is what makes a crashed rebuild safe to
+// redo: recomputed-from-raw values replace whatever partial state exists.
+const dashboardToolSQL = `CASE
+	WHEN btrim(lower(coalesce(e.user_agent, ''))) LIKE 'claude-cli%' OR btrim(lower(coalesce(e.user_agent, ''))) LIKE 'claude-code%' THEN 'Claude Code'
+	WHEN btrim(lower(coalesce(e.user_agent, ''))) LIKE 'codex-tui%' OR btrim(lower(coalesce(e.user_agent, ''))) LIKE 'codex/%' THEN 'Codex'
+	WHEN btrim(lower(coalesce(e.user_agent, ''))) = 'opencode' OR btrim(lower(coalesce(e.user_agent, ''))) LIKE 'opencode/%' OR btrim(lower(coalesce(e.user_agent, ''))) LIKE 'opencode-%' OR btrim(lower(coalesce(e.user_agent, ''))) LIKE 'opencode.%' THEN 'OpenCode'
+	WHEN btrim(lower(coalesce(e.user_agent, ''))) = 'pi' OR btrim(lower(coalesce(e.user_agent, ''))) LIKE 'pi/%' OR btrim(lower(coalesce(e.user_agent, ''))) LIKE 'pi-%' OR btrim(lower(coalesce(e.user_agent, ''))) LIKE 'pi.%' OR btrim(lower(coalesce(e.user_agent, ''))) LIKE 'pi %' THEN 'Pi'
+	WHEN btrim(lower(coalesce(e.user_agent, ''))) LIKE 'charm-crush/%' THEN 'Charm-Crush'
+	WHEN btrim(lower(coalesce(e.user_agent, ''))) LIKE 'openai/%' THEN 'OpenAI'
+	WHEN btrim(lower(coalesce(e.user_agent, ''))) LIKE 'gemini-cli/%' THEN 'Gemini CLI'
+	WHEN btrim(lower(coalesce(e.user_agent, ''))) LIKE 'aider/%' THEN 'Aider'
+	WHEN btrim(lower(coalesce(e.user_agent, ''))) LIKE 'omp/%' THEN 'omp'
+	WHEN btrim(lower(coalesce(e.user_agent, ''))) LIKE 'curl/%' THEN 'curl'
+	ELSE 'Other'
+END`
+
+var rebuildHourSQL = fmt.Sprintf(`
+	INSERT INTO usage_hourly (hour, username, group_name, model, provider,
+		requests, prompt_tokens, completion_tokens, total_tokens,
+		cached_input_tokens, cache_creation_tokens, cost_usd)
+	SELECT date_trunc('hour', e.timestamp), e.username, COALESCE(e.group_name, ''), e.model, e.provider,
+		COUNT(*), SUM(e.prompt_tokens), SUM(e.completion_tokens), SUM(e.total_tokens),
+		SUM(e.cached_input_tokens), SUM(e.cache_creation_tokens), COALESCE(SUM(e.cost_usd), 0)
+	FROM usage_events e
+	WHERE e.timestamp >= $1 AND e.timestamp < $2
+	GROUP BY date_trunc('hour', e.timestamp), e.username, COALESCE(e.group_name, ''), e.model, e.provider
+	ON CONFLICT (hour, username, group_name, model, provider) DO UPDATE SET
+		requests = EXCLUDED.requests,
+		prompt_tokens = EXCLUDED.prompt_tokens,
+		completion_tokens = EXCLUDED.completion_tokens,
+		total_tokens = EXCLUDED.total_tokens,
+		cached_input_tokens = EXCLUDED.cached_input_tokens,
+		cache_creation_tokens = EXCLUDED.cache_creation_tokens,
+		cost_usd = EXCLUDED.cost_usd`)
+
+var rebuildToolHourSQL = fmt.Sprintf(`
+	INSERT INTO usage_tool_hourly (hour, username, group_name, model, provider, tool,
+		requests, prompt_tokens, completion_tokens, total_tokens,
+		cached_input_tokens, cache_creation_tokens, cost_usd)
+	SELECT date_trunc('hour', e.timestamp), e.username, COALESCE(e.group_name, ''), e.model, e.provider,
+		%s, COUNT(*), SUM(e.prompt_tokens), SUM(e.completion_tokens), SUM(e.total_tokens),
+		SUM(e.cached_input_tokens), SUM(e.cache_creation_tokens), COALESCE(SUM(e.cost_usd), 0)
+	FROM usage_events e
+	WHERE e.timestamp >= $1 AND e.timestamp < $2
+	GROUP BY date_trunc('hour', e.timestamp), e.username, COALESCE(e.group_name, ''), e.model, e.provider, %s
+	ON CONFLICT (hour, username, group_name, model, provider, tool) DO UPDATE SET
+		requests = EXCLUDED.requests, prompt_tokens = EXCLUDED.prompt_tokens,
+		completion_tokens = EXCLUDED.completion_tokens, total_tokens = EXCLUDED.total_tokens,
+		cached_input_tokens = EXCLUDED.cached_input_tokens,
+		cache_creation_tokens = EXCLUDED.cache_creation_tokens, cost_usd = EXCLUDED.cost_usd`, dashboardToolSQL, dashboardToolSQL)
+
+func (s *Store) metaGet(ctx context.Context, key string) (string, bool) {
+	v, ok, _ := s.metaLookup(ctx, key)
+	return v, ok
+}
+
+// metaLookup distinguishes a missing row from a database error so callers on
+// the dashboard path can log a real dependency failure instead of treating
+// every failure as "the worker has not reported yet".
+func (s *Store) metaLookup(ctx context.Context, key string) (string, bool, error) {
+	var v string
+	err := s.db.QueryRowContext(ctx, `SELECT value FROM rollup_meta WHERE key = $1`, key).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return v, true, nil
+}
+
+func (s *Store) metaSet(ctx context.Context, key, value string) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO rollup_meta (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+		key, value)
+	return err
+}
+
+// metaLookupParity reads the shared parity verdict in one statement so the
+// healthy flag and its timestamp always come from the same snapshot.
+func (s *Store) metaLookupParity(ctx context.Context) (healthyRaw, checkedRaw string, checkedFound bool, err error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT key, value FROM rollup_meta WHERE key IN ($1, $2)`,
+		metaParityHealthy, metaParityCheckedAt)
+	if err != nil {
+		return "", "", false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var key, value string
+		if err := rows.Scan(&key, &value); err != nil {
+			return "", "", false, err
+		}
+		switch key {
+		case metaParityHealthy:
+			healthyRaw = value
+		case metaParityCheckedAt:
+			checkedRaw = value
+			checkedFound = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", "", false, err
+	}
+	return healthyRaw, checkedRaw, checkedFound, nil
+}
+
+// metaSetParity writes the parity verdict atomically. When guardBefore is
+// non-zero the write is skipped if a newer verdict (a repricing invalidation
+// or another check) landed after guardBefore, so a long-running check cannot
+// overwrite a fresher invalidation.
+func (s *Store) metaSetParity(ctx context.Context, healthy bool, checkedAt, guardBefore time.Time) (bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	rows, err := tx.QueryContext(ctx,
+		`SELECT key, value FROM rollup_meta WHERE key IN ($1, $2) FOR UPDATE`,
+		metaParityHealthy, metaParityCheckedAt)
+	if err != nil {
+		return false, err
+	}
+	var currentCheckedAt string
+	for rows.Next() {
+		var key, value string
+		if err := rows.Scan(&key, &value); err != nil {
+			_ = rows.Close()
+			return false, err
+		}
+		if key == metaParityCheckedAt {
+			currentCheckedAt = value
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return false, err
+	}
+	if err := rows.Close(); err != nil {
+		return false, err
+	}
+	if !guardBefore.IsZero() && currentCheckedAt != "" {
+		if parsed, parseErr := time.Parse(time.RFC3339, currentCheckedAt); parseErr == nil && parsed.After(guardBefore) {
+			return false, nil
+		}
+	}
+
+	healthyStr := "false"
+	if healthy {
+		healthyStr = "true"
+	}
+	for key, value := range map[string]string{
+		metaParityHealthy:   healthyStr,
+		metaParityCheckedAt: checkedAt.UTC().Format(time.RFC3339),
+	} {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO rollup_meta (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+			key, value); err != nil {
+			return false, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// parityStateFromMeta interprets the shared parity verdict written by whichever
+// process owns maintenance. Pure so the staleness rule is testable without a
+// database.
+func parityStateFromMeta(healthyRaw, checkedRaw string, now time.Time, maxAge time.Duration) (healthy bool, checkedAt time.Time, ok bool) {
+	if checkedRaw == "" {
+		return false, time.Time{}, false
+	}
+	parsed, err := time.Parse(time.RFC3339, checkedRaw)
+	if err != nil {
+		return false, time.Time{}, false
+	}
+	// A verdict from the future is a clock error, not freshness; treat it as
+	// red until the worker reports a sane timestamp.
+	if parsed.After(now.Add(5 * time.Minute)) {
+		return false, parsed, true
+	}
+	if maxAge > 0 && now.Sub(parsed) > maxAge {
+		return false, parsed, true
+	}
+	return healthyRaw == "true", parsed, true
+}
+
+// RunParitySync keeps this process's parity state in step with rollup_meta.
+// API-mode pods do not run maintenance; without this they would fall back to
+// raw reads forever once a dedicated worker owns the loop.
+func (s *Store) RunParitySync(ctx context.Context, interval, maxAge time.Duration) {
+	if interval < 5*time.Second {
+		interval = 5 * time.Second
+	}
+	s.syncParityFromMeta(ctx, maxAge)
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			s.syncParityFromMeta(ctx, maxAge)
+		}
+	}
+}
+
+func (s *Store) syncParityFromMeta(ctx context.Context, maxAge time.Duration) {
+	// Latch the shared backfill flag first: api-mode pods do not run the
+	// backfill, and rollupsLive() requires this cache alongside parity.
+	readyBefore := s.rollupsReadyNow.Load()
+	if s.RollupsReady(ctx) && !readyBefore {
+		slog.Info("rollup readiness synced from rollup_meta")
+	}
+	healthyRaw, checkedRaw, ok, err := s.metaLookupParity(ctx)
+	if err != nil {
+		slog.Warn("read rollup parity state failed", "error", err)
+		// An unreadable verdict is not a green one. Mark local health unknown;
+		// if this deployment was already confirmed, rollupsLive keeps serving
+		// under the documented serve-stale policy instead of stampeding raw.
+		s.parityHealthy.Store(false)
+		s.rollupsLive()
+		return
+	}
+	if !ok {
+		if s.parityMetaMissing.CompareAndSwap(false, true) {
+			slog.Warn("rollup parity checked_at missing — health is unknown; a confirmed deployment keeps serving under serve-stale until the worker reports")
+		}
+		s.parityHealthy.Store(false)
+		s.rollupsLive()
+		return
+	}
+	s.parityMetaMissing.Store(false)
+	healthy, checkedAt, parsed := parityStateFromMeta(healthyRaw, checkedRaw, time.Now().UTC(), maxAge)
+	if !parsed {
+		slog.Warn("rollup parity checked_at is unparsable — health is unknown", "value", checkedRaw)
+		s.parityHealthy.Store(false)
+		s.rollupsLive()
+		return
+	}
+	// Latch only a verdict that is still fresh. Once a pod has confirmed
+	// parity it keeps serving the continuously rebuilt rollups under the
+	// documented serve-stale policy, but a pod booting after a long outage
+	// must not treat an ancient green as confirmation and skip the raw
+	// reads. parityStateFromMeta already rejects a future timestamp.
+	if healthy {
+		s.parityConfirmed.Store(true)
+	}
+	prev := s.parityHealthy.Swap(healthy)
+	green := 0.0
+	if healthy {
+		green = 1
+	}
+	metrics.RollupParityGreen.Set(green)
+	metrics.RollupParityCheckedAtSeconds.Set(float64(checkedAt.Unix()))
+	if prev != healthy {
+		slog.Info("rollup parity state synced from rollup_meta",
+			"healthy", healthy, "checked_at", checkedRaw, "stale_after", maxAge.String())
+	}
+}
+
+// RollupsReady reports whether usage_hourly is trustworthy for reads —
+// the gate for the Phase 3 read switch (PR B). Memory flag first; meta
+// after, so a restarted pod with a completed backfill is instantly ready.
+// The meta read is bounded so a hung database cannot stall the parity sync
+// or the maintenance loop.
+func (s *Store) RollupsReady(ctx context.Context) bool {
+	if s.rollupsReadyNow.Load() {
+		return true
+	}
+	metaCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if v, ok := s.metaGet(metaCtx, metaRollupsReady); ok && v == "true" {
+		s.rollupsReadyNow.Store(true)
+		return true
+	}
+	return false
+}
+
+// EnsureRollupsBackfilled runs the one-time cost backfill and rollup
+// rebuild to completion, resuming from watermarks. Safe to launch on
+// every boot: in steady state it reads one meta row and exits.
+func (s *Store) EnsureRollupsBackfilled(ctx context.Context) {
+	if s.RollupsReady(ctx) {
+		for {
+			if err := s.ensureToolRollups(ctx); err == nil {
+				break
+			} else {
+				slog.Error("tool rollup backfill failed, retrying in 60s", "error", err)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(60 * time.Second):
+			}
+		}
+		return
+	}
+	for {
+		done, err := s.backfillPass(ctx)
+		if err == nil && done {
+			if err := s.ensureToolRollups(ctx); err != nil {
+				slog.Error("tool rollup backfill failed", "error", err)
+				continue
+			}
+			return
+		}
+		if err != nil {
+			slog.Error("rollups backfill pass failed, retrying in 60s", "error", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(60 * time.Second):
+		}
+	}
+}
+
+// ToolRollupsReady reports whether the additive tool dimension has been
+// rebuilt. It is separate from the legacy usage_hourly readiness flag so a
+// rolling deployment never serves an empty tool table as authoritative.
+func (s *Store) ToolRollupsReady() bool {
+	v, ok := s.metaGet(context.Background(), metaToolRollupsReady)
+	if !ok || v != "true" {
+		return false
+	}
+	version, ok := s.metaGet(context.Background(), metaToolRollupVersion)
+	return ok && version == toolRollupVersion
+}
+
+// ensureToolRollups rebuilds the additive tool table while holding an
+// exclusive lock on that table. New pods' tool upserts wait behind the lock;
+// old pods never touch this table. The existing usage_hourly table is not
+// truncated or re-keyed, preserving zero-downtime compatibility.
+func (s *Store) ensureToolRollups(ctx context.Context) error {
+	if s.ToolRollupsReady() {
+		return nil
+	}
+	// A pre-versioned deployment may still have ready=true. Make all readers
+	// fall back to raw events while the additive table is rebuilt from the
+	// source ledger.
+	if ready, ok := s.metaGet(ctx, metaToolRollupsReady); ok && ready == "true" {
+		if err := s.metaSet(ctx, metaToolRollupsReady, "false"); err != nil {
+			return err
+		}
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	// Coordinate the additive tool-table rebuild with migrate(). Migrations
+	// acquire migrationLockKey at the session level before CREATE/INDEX DDL;
+	// using the same key transactionally prevents a new pod from waiting on
+	// tool-table DDL while another pod is rebuilding the table.
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, migrationLockKey); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `LOCK TABLE usage_tool_hourly IN ACCESS EXCLUSIVE MODE`); err != nil {
+		return err
+	}
+	// Several pods can pass the fast-path check before the first rebuild
+	// commits. Recheck while holding the exclusive table lock so waiters do
+	// not repeat the full historical rebuild. The readiness marker is written
+	// in this same transaction below, leaving no commit-to-marker race.
+	var ready, version string
+	err = tx.QueryRowContext(ctx, `SELECT value FROM rollup_meta WHERE key = $1`, metaToolRollupsReady).Scan(&ready)
+	if err == nil {
+		_ = tx.QueryRowContext(ctx, `SELECT value FROM rollup_meta WHERE key = $1`, metaToolRollupVersion).Scan(&version)
+	}
+	if err == nil && ready == "true" && version == toolRollupVersion {
+		return tx.Commit()
+	}
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `TRUNCATE usage_tool_hourly`); err != nil {
+		return err
+	}
+	// The initial table needs all history, so use the same normalized
+	// expression without a time bound for the one-time additive rebuild.
+	full := fmt.Sprintf(`INSERT INTO usage_tool_hourly (hour, username, group_name, model, provider, tool, requests, prompt_tokens, completion_tokens, total_tokens, cached_input_tokens, cache_creation_tokens, cost_usd)
+		SELECT date_trunc('hour', e.timestamp), e.username, COALESCE(e.group_name,''), e.model, e.provider, %s, COUNT(*), SUM(e.prompt_tokens), SUM(e.completion_tokens), SUM(e.total_tokens), SUM(e.cached_input_tokens), SUM(e.cache_creation_tokens), COALESCE(SUM(e.cost_usd),0)
+		FROM usage_events e GROUP BY date_trunc('hour',e.timestamp),e.username,COALESCE(e.group_name,''),e.model,e.provider,%s`, dashboardToolSQL, dashboardToolSQL)
+	if _, err := tx.ExecContext(ctx, full); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO rollup_meta (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+		metaToolRollupsReady, "true"); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO rollup_meta (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+		metaToolRollupVersion, toolRollupVersion); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// backfillPass drives the stages to completion in dependency order:
+// every historical row gets a cost BEFORE any hour is rebuilt (rebuild
+// sums cost_usd), and the ready flag lands only after all of it. Each
+// stage is resumable, so a restart mid-stage picks up at the watermark.
+func (s *Store) backfillPass(ctx context.Context) (bool, error) {
+	start := time.Now()
+	defer func() {
+		metrics.RollupBackfillDurationSeconds.Observe(time.Since(start).Seconds())
+	}()
+	for {
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
+		done, err := s.costStep(ctx)
+		if err != nil {
+			return false, err
+		}
+		if !done {
+			continue
+		}
+		break
+	}
+	for {
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
+		done, err := s.rebuildStep(ctx)
+		if err != nil {
+			return false, err
+		}
+		if !done {
+			continue
+		}
+		break
+	}
+	if err := s.refreshRecentHours(ctx); err != nil {
+		return false, err
+	}
+	if err := s.metaSet(ctx, metaRollupsReady, "true"); err != nil {
+		return false, err
+	}
+	s.rollupsReadyNow.Store(true)
+	slog.Info("rollups backfill complete — usage_hourly is authoritative for dashboard reads")
+	return true, nil
+}
+
+// costStep fills one window of NULL cost_usd rows and advances the
+// watermark. New live rows already carry a cost, so the watermark simply
+// sweeps past them. Returns done when it has passed MAX(id).
+func (s *Store) costStep(ctx context.Context) (bool, error) {
+	var maxID int64
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(id), 0) FROM usage_events`).Scan(&maxID); err != nil {
+		return false, fmt.Errorf("max id: %w", err)
+	}
+	wm := int64(0)
+	if v, ok := s.metaGet(ctx, metaCostWatermark); ok {
+		if _, err := fmt.Sscanf(v, "%d", &wm); err != nil {
+			wm = 0
+		}
+	}
+	if wm >= maxID {
+		return true, nil
+	}
+	next := minInt64(wm+costBackfillStep, maxID)
+	res, err := s.db.ExecContext(ctx, costBackfillSQL, wm, next)
+	if err != nil {
+		return false, fmt.Errorf("cost backfill (%d,%d]: %w", wm, next, err)
+	}
+	n, _ := res.RowsAffected()
+	if err := s.metaSet(ctx, metaCostWatermark, fmt.Sprint(next)); err != nil {
+		return false, err
+	}
+	slog.Info("cost backfill progress", "through_id", next, "max_id", maxID, "rows_costed", n)
+	// Yield between batches: this competes with live traffic on pg-1 and
+	// with replication to the read replicas.
+	time.Sleep(100 * time.Millisecond)
+	return next >= maxID, nil
+}
+
+// rebuildStep rewrites the oldest not-yet-rebuilt hour strictly before
+// the current hour (the live path already maintains current-hour rows;
+// refreshRecentHours closes the final gap). Returns done when every hour
+// before the current one is rebuilt.
+func (s *Store) rebuildStep(ctx context.Context) (bool, error) {
+	cutoff := time.Now().UTC().Truncate(time.Hour) // current hour — excluded
+	wm := time.Time{}
+	if v, ok := s.metaGet(ctx, metaRollupWatermark); ok {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			wm = t
+		}
+	}
+	hour := wm.Add(time.Hour) // next hour to rebuild
+	if wm.IsZero() {
+		var minHour sql.NullTime
+		if err := s.db.QueryRowContext(ctx,
+			`SELECT MIN(date_trunc('hour', timestamp)) FROM usage_events`).Scan(&minHour); err != nil {
+			return false, fmt.Errorf("min hour: %w", err)
+		}
+		if !minHour.Valid {
+			return true, nil // empty table
+		}
+		hour = minHour.Time
+	}
+	if !hour.Before(cutoff) {
+		return true, nil // all completed hours rebuilt
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	if _, err := tx.ExecContext(ctx, rebuildHourLockSQL, hour, hour.Add(time.Hour)); err != nil {
+		_ = tx.Rollback()
+		return false, fmt.Errorf("lock hour %s: %w", hour.Format(time.RFC3339), err)
+	}
+	if _, err := tx.ExecContext(ctx, rebuildHourSQL, hour, hour.Add(time.Hour)); err != nil {
+		_ = tx.Rollback()
+		return false, fmt.Errorf("rebuild hour %s: %w", hour.Format(time.RFC3339), err)
+	}
+	if _, err := tx.ExecContext(ctx, rebuildToolHourLockSQL, hour, hour.Add(time.Hour)); err != nil {
+		_ = tx.Rollback()
+		return false, fmt.Errorf("rebuild tool hour lock %s: %w", hour.Format(time.RFC3339), err)
+	}
+	if _, err := tx.ExecContext(ctx, rebuildToolHourSQL, hour, hour.Add(time.Hour)); err != nil {
+		_ = tx.Rollback()
+		return false, fmt.Errorf("rebuild tool hour %s: %w", hour.Format(time.RFC3339), err)
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	if err := s.metaSet(ctx, metaRollupWatermark, hour.Format(time.RFC3339)); err != nil {
+		return false, err
+	}
+	// Same courtesy as the cost sweep: one small tx per hour, but the
+	// loop must not saturate pg-1 or replication lag while it drains.
+	time.Sleep(50 * time.Millisecond)
+	return hour.Add(time.Hour).After(cutoff) || hour.Add(time.Hour).Equal(cutoff), nil
+}
+
+// refreshRecentHours rewrites the last three hours from raw. It closes
+// the final backfill gap before the ready flag lands, and part B runs it
+// on the maintenance ticker to keep recent buckets exactly reconciled.
+// The range lock (ascending hour order) serializes it against live
+// insert-path upserts so a rebuild can never drop a concurrent increment.
+func (s *Store) refreshRecentHours(ctx context.Context) error {
+	now := time.Now().UTC()
+	from := now.Add(-3 * time.Hour).Truncate(time.Hour)
+	to := now.Add(time.Hour).Truncate(time.Hour)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, rebuildHourLockSQL, from, to); err != nil {
+		return fmt.Errorf("lock recent hours: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, rebuildHourSQL, from, to); err != nil {
+		return fmt.Errorf("refresh recent hours: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, rebuildToolHourLockSQL, from, to); err != nil {
+		return fmt.Errorf("refresh tool hours lock: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, rebuildToolHourSQL, from, to); err != nil {
+		return fmt.Errorf("refresh tool hours: %w", err)
+	}
+	return tx.Commit()
+}
+
+// ---- Read gating and standing parity (part B) ----
+
+// UseRollups applies the DASHBOARD_USE_ROLLUPS read switch. It is
+// deliberately independent of deployment: maintenance keeps the table
+// reconciled and parity warm while the flag is off, so enabling is a
+// one-knob flip over a table that has been green all along — and the
+// one-knob rollback (plan rev2, Noy's two-decisions rule).
+func (s *Store) UseRollups(on bool) {
+	s.useRollups.Store(on)
+	slog.Info("rollup read switch set", "enabled", on)
+}
+
+// rollupsLive is the read path's single decision point: flag on, backfill
+// complete, and parity confirmed at least once for this deployment.
+//
+// A red parity check after that point is an ALERT, not a read-gate flip.
+// Falling back to raw on every parity blip turned a transient mismatch into
+// full-window scans of usage_events on the shared primary — exactly the load
+// the rollups exist to avoid. The maintenance loop keeps rebuilding the
+// table even when parity is red, so the safer failure mode is to keep serving
+// the (bounded-staleness) rollups and let the alert/status/metric drive the
+// operator response. Turning the flag off is still the explicit rollback.
+//
+// parityConfirmed is hydrated from rollup_meta on boot only while the verdict
+// is still fresh (parityMaxAge). A restart after a known-green deployment
+// resumes rollup reads immediately instead of scanning raw until the first
+// check finishes; an ancient green from a stalled worker does not permanently
+// enable rollups after a restart.
+func (s *Store) rollupsLive() bool {
+	flag := s.useRollups.Load()
+	ready := s.rollupsReadyNow.Load()
+	confirmed := s.parityConfirmed.Load()
+	healthy := s.parityHealthy.Load()
+	live := flag && ready && confirmed
+	if s.servingRollups.Swap(live) != live {
+		switch {
+		case live:
+			slog.Info("dashboard aggregations serving from usage_hourly", "parity_healthy", healthy)
+		case flag:
+			slog.Warn("dashboard rollup reads inactive — serving raw", "ready", ready, "parity_confirmed", confirmed)
+		}
+	}
+	return live
+}
+
+// RollupServing / ParityHealthy / RollupFlag report live state for the
+// admin status endpoint.
+func (s *Store) RollupServing() bool { return s.servingRollups.Load() }
+func (s *Store) ParityHealthy() bool { return s.parityHealthy.Load() }
+func (s *Store) RollupFlag() bool    { return s.useRollups.Load() }
+
+// RunRollupMaintenance runs the part B loop: reconcile recent hours, then
+// the standing parity check (plan rev2, Noy's conditions 2 and 3). It runs
+// REGARDLESS of the read flag — the table stays exactly reconciled and the
+// parity signal stays warm so the flag flip is risk-free. A red check is a
+// loud alert, not an automatic fallback to raw: the rollup table is still
+// rebuilt every tick, so a transient mismatch must not turn dashboard traffic
+// into full-ledger scans. The first pass runs immediately; deep (7d) parity
+// runs hourly. parityMaxAge bounds the boot-time latch so a worker that
+// restarted after a long outage cannot trust an ancient green verdict.
+func (s *Store) RunRollupMaintenance(ctx context.Context, interval, parityMaxAge time.Duration) {
+	if interval < time.Minute {
+		interval = time.Minute
+	}
+	if parityMaxAge <= 0 {
+		parityMaxAge = 30 * time.Minute
+	}
+	// Resume the last-known-good verdict so a restart does not fall back to
+	// raw scans while the first parity check is still running. The age bound
+	// is the same one API pods use for the shared verdict.
+	if healthyRaw, checkedRaw, ok, err := s.metaLookupParity(ctx); err == nil && ok {
+		if healthy, _, parsed := parityStateFromMeta(healthyRaw, checkedRaw, time.Now().UTC(), parityMaxAge); parsed && healthy {
+			s.parityHealthy.Store(true)
+			s.parityConfirmed.Store(true)
+		}
+	}
+	deepTicks := int(time.Hour / interval)
+	if deepTicks < 1 {
+		deepTicks = 1
+	}
+	s.maintainOnce(ctx, true)
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	ticks := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			ticks++
+			s.maintainOnce(ctx, ticks%deepTicks == 0)
+		}
+	}
+}
+
+func (s *Store) maintainOnce(ctx context.Context, deep bool) {
+	start := time.Now()
+	if !s.RollupsReady(ctx) {
+		return // the backfill goroutine owns the table until it lands ready
+	}
+	if err := s.refreshRecentHours(ctx); err != nil {
+		slog.Error("rollup refresh failed", "error", err)
+		// A failed pass must not look healthy: clear the local health flag and
+		// publish a red verdict with a fresh checked_at. If parity was
+		// confirmed before, rollupsLive keeps serving the continuously rebuilt
+		// table under the documented serve-stale policy; this pod does not
+		// silently flip every read to raw.
+		s.parityHealthy.Store(false)
+		s.rollupsLive()
+		if _, writeErr := s.metaSetParity(ctx, false, time.Now().UTC(), start); writeErr != nil {
+			slog.Warn("failed to publish red parity after refresh failure", "error", writeErr)
+		}
+		metrics.RollupRefreshDurationSeconds.Observe(time.Since(start).Seconds())
+		metrics.RollupParityGreen.Set(math.NaN())
+		return
+	}
+	window := 24 * time.Hour
+	if deep {
+		window = 7 * 24 * time.Hour
+	}
+	// Until excludes the in-flight hour: live traffic and replication are
+	// still moving it, and red there would be measurement, not drift.
+	until := time.Now().UTC().Truncate(time.Hour)
+	report, err := s.ParityReport(ctx, until.Add(-window), until)
+	if err != nil {
+		slog.Error("rollup parity check failed", "window", window, "error", err)
+		s.parityHealthy.Store(false)
+		s.rollupsLive()
+		if _, writeErr := s.metaSetParity(ctx, false, time.Now().UTC(), start); writeErr != nil {
+			slog.Warn("failed to publish red parity after parity check failure", "error", writeErr)
+		}
+		metrics.RollupRefreshDurationSeconds.Observe(time.Since(start).Seconds())
+		metrics.RollupParityGreen.Set(math.NaN())
+		return
+	}
+	red := false
+	for _, ps := range report {
+		if !ps.Match && !red {
+			red = true
+		}
+		if ps.Note != "" && deep {
+			slog.Warn("rollup parity cost note", "shape", ps.Shape, "key", ps.Key,
+				"raw_cost", ps.RawCostUSD, "rollup_cost", ps.RollCostUSD)
+		}
+	}
+	metrics.RollupRefreshDurationSeconds.Observe(time.Since(start).Seconds())
+	parityGreen := 0.0
+	if !red {
+		parityGreen = 1.0
+	}
+	now := time.Now().UTC()
+	prev := s.parityHealthy.Load()
+	wrote, writeErr := s.metaSetParity(ctx, !red, now, start)
+	switch {
+	case writeErr != nil:
+		slog.Warn("failed to publish rollup parity verdict", "error", writeErr)
+		// The shared verdict was not updated. Mark local health unknown, but
+		// do not claim a local green the other processes cannot see; a
+		// previously confirmed deployment still serves under serve-stale.
+		s.parityHealthy.Store(false)
+		s.rollupsLive()
+		metrics.RollupParityGreen.Set(math.NaN())
+	case !wrote:
+		slog.Info("parity verdict skipped — a newer invalidation landed during the check", "window", window)
+		s.parityHealthy.Store(false)
+		s.rollupsLive()
+		metrics.RollupParityGreen.Set(math.NaN())
+	default:
+		if !red {
+			s.parityConfirmed.Store(true)
+		}
+		s.parityHealthy.Store(!red)
+		metrics.RollupParityGreen.Set(parityGreen)
+		metrics.RollupParityCheckedAtSeconds.Set(float64(now.Unix()))
+	}
+	if red {
+		if s.parityConfirmed.Load() {
+			slog.Error("ROLLUP PARITY RED — still serving usage_hourly; alert, reads are not failed back to raw", "window", window, "shapes", report)
+		} else {
+			slog.Error("ROLLUP PARITY RED before any confirmed green — serving raw", "window", window, "shapes", report)
+		}
+	} else if deep && wrote {
+		slog.Info("rollup parity green", "window", window)
+	} else if !prev && s.parityHealthy.Load() {
+		slog.Info("rollup parity recovered — dashboard reads return to usage_hourly")
+	}
+}
+
+// ---- Parity gate (plan rev2 pt.5): pre-switch gate AND standing check. ----
+
+type ParityShape struct {
+	Shape        string  `json:"shape"`
+	Key          string  `json:"key"`
+	RawRequests  int64   `json:"raw_requests"`
+	RollRequests int64   `json:"rollup_requests"`
+	RawCostUSD   float64 `json:"raw_cost_usd"`
+	RollCostUSD  float64 `json:"rollup_cost_usd"`
+	Match        bool    `json:"match"`
+	Note         string  `json:"note,omitempty"`
+}
+
+// ParityReport diffs raw (today's read path: costUSDExpr over
+// usage_events) against usage_hourly for a window, at several keyings:
+// one total, per-model, per-group, per-user and per-day. Request counts
+// must match exactly — that is the automatic gate, and in part B it is
+// standing: a red check flips reads back to raw until it recovers. A
+// cost-only difference is the expected signature of a model_pricing
+// change inside the window (raw re-prices at today's table, the rollup
+// holds insert-time prices); it is reported as a note, not a red, and a
+// human reads it — auto-falling-back on every catalog change would keep
+// the table permanently switched off. Group labels are normalized the same
+// way on both sides — NULL and empty group_name render as 'unknown' — so
+// legacy empty-string rows do not read as drift. The whole report runs
+// inside ONE REPEATABLE READ
+// transaction on the reader connection: the invariant only holds within
+// one snapshot — a raw query at WAL position P and the rollup query at
+// a later P' would diff every event that replicated in between.
+func (s *Store) ParityReport(ctx context.Context, since, until time.Time) ([]ParityShape, error) {
+	// Both sides must share HOUR boundaries: usage_hourly buckets are
+	// hour-aligned, so raw must be truncated to the same boundaries or a
+	// non-aligned window would drop the edge buckets on one side and the
+	// gate would diff red from measurement, not drift.
+	// The maintenance caller passes the current hour as until and intentionally
+	// excludes that in-flight bucket. Do not add an hour here: doing so includes
+	// live traffic that has not yet been rebuilt into usage_hourly and flips the
+	// parity gate red whenever LIVE_ROLLUPS_ENABLED=false.
+	since = since.Truncate(time.Hour)
+	until = until.Truncate(time.Hour)
+
+	tx, err := s.reader().BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	if err != nil {
+		return nil, fmt.Errorf("parity snapshot: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	type acc struct {
+		rawReq, rollReq   int64
+		rawCost, rollCost float64
+	}
+	collect := func(query string, raw bool, into map[string]*acc) error {
+		rows, err := tx.QueryContext(ctx, query, since, until)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var k string
+			var req int64
+			var cost float64
+			if err := rows.Scan(&k, &req, &cost); err != nil {
+				return err
+			}
+			a := into[k]
+			if a == nil {
+				a = &acc{}
+				into[k] = a
+			}
+			if raw {
+				a.rawReq, a.rawCost = req, cost
+			} else {
+				a.rollReq, a.rollCost = req, cost
+			}
+		}
+		return rows.Err()
+	}
+	shapes := parityShapes()
+
+	out := make([]ParityShape, 0)
+	for _, sh := range shapes {
+		side := map[string]*acc{}
+		if err := collect(sh.RawSQL, true, side); err != nil {
+			return nil, fmt.Errorf("parity raw %s: %w", sh.Name, err)
+		}
+		if err := collect(sh.RollSQL, false, side); err != nil {
+			return nil, fmt.Errorf("parity rollup %s: %w", sh.Name, err)
+		}
+		keys := make([]string, 0, len(side))
+		for k := range side {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			a := side[k]
+			ps := ParityShape{Shape: sh.Name, Key: k, RawRequests: a.rawReq, RollRequests: a.rollReq,
+				RawCostUSD: a.rawCost, RollCostUSD: a.rollCost, Match: a.rawReq == a.rollReq}
+			d := a.rawCost - a.rollCost
+			if d > 0.005 || d < -0.005 {
+				ps.Note = "cost differs beyond cents tolerance — expected only if model_pricing changed inside the window (rollup holds insert-time prices)"
+			}
+			out = append(out, ps)
+		}
+	}
+	return out, nil
+}
+
+// parityShapes returns the raw-vs-rollup query pairs for every keying the
+// switched readers use. Package-level so the live-schema pre-flight can
+// PREPARE every one of them — the part-B first boot found
+// "GROUP BY 'total'" (Postgres rejects a non-integer constant in GROUP
+// BY) shipped in part A's ParityReport unexecuted: the endpoint was never
+// hit and the pre-flight had deliberately skipped parity SQL. Parity SQL
+// is now READ-PATH-CRITICAL code and must parse before any of it ships.
+// The total key groups by OUTPUT POSITION (1), not by a string literal,
+// on both sides.
+type parityShapeSQL struct {
+	Name    string
+	RawSQL  string
+	RollSQL string
+}
+
+func parityShapes() []parityShapeSQL {
+	return []parityShapeSQL{
+		{"total",
+			fmt.Sprintf(`SELECT 'total', COUNT(*), COALESCE(ROUND(SUM(%s)::numeric,2),0)::float8
+				FROM usage_events e LEFT JOIN model_pricing p ON e.model = p.model
+				WHERE e.timestamp >= $1 AND e.timestamp < $2 GROUP BY 1`, costUSDExpr),
+			`SELECT 'total', COALESCE(SUM(requests),0), COALESCE(ROUND(SUM(cost_usd)::numeric,2),0)::float8
+				FROM usage_hourly WHERE hour >= $1 AND hour < $2 GROUP BY 1`},
+		{"per_model",
+			fmt.Sprintf(`SELECT e.model, COUNT(*), COALESCE(ROUND(SUM(%s)::numeric,2),0)::float8
+				FROM usage_events e LEFT JOIN model_pricing p ON e.model = p.model
+				WHERE e.timestamp >= $1 AND e.timestamp < $2 GROUP BY e.model`, costUSDExpr),
+			`SELECT model, COALESCE(SUM(requests),0), COALESCE(ROUND(SUM(cost_usd)::numeric,2),0)::float8
+				FROM usage_hourly WHERE hour >= $1 AND hour < $2 GROUP BY model`},
+		{"per_group",
+			fmt.Sprintf(`SELECT COALESCE(NULLIF(e.group_name, ''), 'unknown'), COUNT(*), COALESCE(ROUND(SUM(%s)::numeric,2),0)::float8
+				FROM usage_events e LEFT JOIN model_pricing p ON e.model = p.model
+				WHERE e.timestamp >= $1 AND e.timestamp < $2
+				GROUP BY COALESCE(NULLIF(e.group_name, ''), 'unknown')`, costUSDExpr),
+			`SELECT COALESCE(NULLIF(group_name, ''), 'unknown'), COALESCE(SUM(requests),0), COALESCE(ROUND(SUM(cost_usd)::numeric,2),0)::float8
+				FROM usage_hourly WHERE hour >= $1 AND hour < $2
+				GROUP BY COALESCE(NULLIF(group_name, ''), 'unknown')`},
+		{"per_user",
+			fmt.Sprintf(`SELECT e.username, COUNT(*), COALESCE(ROUND(SUM(%s)::numeric,2),0)::float8
+				FROM usage_events e LEFT JOIN model_pricing p ON e.model = p.model
+				WHERE e.timestamp >= $1 AND e.timestamp < $2 GROUP BY e.username`, costUSDExpr),
+			`SELECT username, COALESCE(SUM(requests),0), COALESCE(ROUND(SUM(cost_usd)::numeric,2),0)::float8
+				FROM usage_hourly WHERE hour >= $1 AND hour < $2 GROUP BY username`},
+		{"per_day",
+			fmt.Sprintf(`SELECT date_trunc('day', e.timestamp)::text, COUNT(*), COALESCE(ROUND(SUM(%s)::numeric,2),0)::float8
+				FROM usage_events e LEFT JOIN model_pricing p ON e.model = p.model
+				WHERE e.timestamp >= $1 AND e.timestamp < $2
+				GROUP BY date_trunc('day', e.timestamp)::text`, costUSDExpr),
+			`SELECT date_trunc('day', hour)::text, COALESCE(SUM(requests),0), COALESCE(ROUND(SUM(cost_usd)::numeric,2),0)::float8
+				FROM usage_hourly WHERE hour >= $1 AND hour < $2
+				GROUP BY date_trunc('day', hour)::text`},
+	}
+}
+
+func minInt64(a, b int64) int64 {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// ---- Rollup read variants (part B) ----
+//
+// Each constant below is the exact raw-query shape with three swaps and
+// nothing else: the source (usage_hourly, alias e preserved), the window
+// column (e.hour, so bucket and window are the same value — no trunc()
+// per row), and cost (the stored cost_usd instead of the live-priced
+// expression). Counts are SUM(requests), never COUNT(*) — one hourly row
+// is N events. The switch is invisible except for the two known,
+// documented deltas: cost is frozen at event-time instead of re-priced
+// at read, and recent hours lag by the refresh interval; both fall back
+// automatically when parity goes red. The raw variants in postgres.go
+// are untouched text — grep-guarded by tests in both directions.
+
+const rollupOverviewSQL = `
+	SELECT COALESCE(SUM(e.requests),0),
+		COALESCE(SUM(e.prompt_tokens),0),
+		COALESCE(SUM(e.completion_tokens),0),
+		COALESCE(SUM(e.total_tokens),0),
+		COUNT(DISTINCT e.username),
+		COALESCE(ROUND(SUM(e.cost_usd)::numeric, 2), 0)
+	FROM usage_hourly e
+	WHERE e.hour >= $1 AND e.hour < $2 AND ($3 = '' OR COALESCE(NULLIF(e.group_name, ''), 'unknown') = $3) AND ($4 = '' OR e.username = ANY(string_to_array($4, ','))) AND ($5 = '' OR e.model = $5)`
+
+const rollupGroupsSQL = `
+	SELECT COALESCE(NULLIF(e.group_name, ''), 'unknown'),
+		COALESCE(SUM(e.requests),0),
+		COALESCE(SUM(e.total_tokens),0),
+		COUNT(DISTINCT e.username),
+		COALESCE(ROUND(SUM(e.cost_usd)::numeric, 2), 0)
+	FROM usage_hourly e
+	WHERE e.hour >= $1 AND e.hour < $2 AND ($3 = '' OR COALESCE(NULLIF(e.group_name, ''), 'unknown') = $3) AND ($4 = '' OR e.username = ANY(string_to_array($4, ','))) AND ($5 = '' OR e.model = $5)
+	GROUP BY COALESCE(NULLIF(e.group_name, ''), 'unknown')
+	ORDER BY SUM(e.total_tokens) DESC`
+
+const rollupTeamUsageSQL = `
+	SELECT e.username, e.model, e.provider,
+		SUM(e.requests),
+		SUM(e.prompt_tokens),
+		SUM(e.completion_tokens),
+		SUM(e.total_tokens),
+		ROUND(SUM(e.cost_usd)::numeric, 4)
+	FROM usage_hourly e
+	WHERE (e.group_name = $1 OR ($1 = 'unknown' AND e.group_name = ''))
+	GROUP BY e.username, e.model, e.provider
+	ORDER BY e.username, SUM(e.total_tokens) DESC`
+
+// rollupModelsSQL must go through Sprintf: hostedProviderCond carries a
+// doubled LIKE wildcard that only un-doubles when the text passes through
+// a format pass, exactly like the raw variant's Sprintf.
+var rollupModelsSQL = fmt.Sprintf(`
+	SELECT e.model, COALESCE(e.provider, ''),
+		COALESCE(SUM(e.requests),0),
+		COALESCE(SUM(e.total_tokens),0),
+		COALESCE(SUM(e.prompt_tokens),0),
+		COALESCE(SUM(e.completion_tokens),0),
+		COALESCE(SUM(e.cached_input_tokens),0),
+		COALESCE(SUM(e.cache_creation_tokens),0),
+		COALESCE(ROUND(SUM(e.cost_usd)::numeric, 2), 0),
+		bool_or(%s),
+		COALESCE(MAX(p.input_cost_per_mtok), 0),
+		COALESCE(MAX(p.output_cost_per_mtok), 0),
+		COALESCE(MAX(p.cache_read_cost_per_mtok), 0),
+		COALESCE(MAX(p.cache_write_cost_per_mtok), 0)
+	FROM usage_hourly e
+	LEFT JOIN model_pricing p ON e.model = p.model
+	WHERE e.hour >= $1 AND e.hour < $2 AND ($3 = '' OR COALESCE(NULLIF(e.group_name, ''), 'unknown') = $3) AND ($4 = '' OR e.username = ANY(string_to_array($4, ','))) AND ($5 = '' OR e.model = $5)
+	GROUP BY e.model, COALESCE(e.provider, '')
+	ORDER BY SUM(e.total_tokens) DESC`, hostedProviderCond)
+
+// rollupTimelineSQL mirrors the raw timeline shape: bucket truncation and
+// series column are interpolated the same way the raw builder does.
+func rollupTimelineSQL(truncInterval, seriesCol string) string {
+	return fmt.Sprintf(`
+		SELECT date_trunc('%s', e.hour) as bucket,
+			%s as series,
+			COALESCE(SUM(e.total_tokens),0),
+			COALESCE(ROUND(SUM(e.cost_usd)::numeric,2),0),
+			COALESCE(SUM(e.requests),0)
+		FROM usage_hourly e
+		WHERE e.hour >= $1 AND e.hour < $2 AND ($3 = '' OR COALESCE(NULLIF(e.group_name, ''), 'unknown') = $3) AND ($4 = '' OR e.username = ANY(string_to_array($4, ','))) AND ($5 = '' OR e.model = $5)
+		GROUP BY bucket, series
+		ORDER BY bucket, series`, truncInterval, seriesCol)
+}
+
+// rollupUsersSelect is the GetDashboardUsers tail SELECT over the same
+// savings CTE (rendered rollup-side by hostedSavingsWithSQL), mirroring
+// the raw tail's columns, display-name and sort handling exactly.
+var rollupUsersSelect = `
+		SELECT e.username,
+			%s,
+			COALESCE(NULLIF(e.group_name, ''), 'unknown'),
+			COALESCE(SUM(e.requests),0) as requests,
+			COALESCE(SUM(e.prompt_tokens),0) as prompt_tokens,
+			COALESCE(SUM(e.completion_tokens),0) as completion_tokens,
+			COALESCE(SUM(e.total_tokens),0) as total_tokens,
+			COALESCE(ROUND(SUM(e.cost_usd)::numeric, 2), 0) as cost_usd,
+			COALESCE(ROUND(MAX(sv.saved)::numeric, 2), 0) as saved_usd
+		FROM usage_hourly e
+		LEFT JOIN (SELECT l.username AS username, pu.tags->>'first_name' AS first_name, pu.tags->>'last_name' AS last_name FROM partner_user_logins l JOIN partner_users pu ON pu.user_id = l.user_id) up ON up.username = e.username
+		LEFT JOIN sv ON sv.username = e.username
+		WHERE e.hour >= $1 AND e.hour < $2 AND ($3 = '' OR COALESCE(NULLIF(e.group_name, ''), 'unknown') = $3) AND ($4 = '' OR e.username = ANY(string_to_array($4, ','))) AND ($5 = '' OR e.model = $5)
+			AND ($9 = '' OR lower(e.username) LIKE '%%' || lower($9) || '%%' OR lower(TRIM(CONCAT_WS(' ', up.first_name, up.last_name))) LIKE '%%' || lower($9) || '%%')
+		GROUP BY e.username, %s, COALESCE(NULLIF(e.group_name, ''), 'unknown')
+		ORDER BY %s %s, e.username ASC, COALESCE(NULLIF(e.group_name, ''), 'unknown') ASC
+		LIMIT $6 OFFSET $7`
+
+// RecentModels returns the distinct model identifiers seen in the last 7
+// days. Reads the hourly rollup when it is ready (~1k rows) and falls back
+// to the raw ledger otherwise — the same gating the dashboard read switch
+// uses, for the allowance editor's candidate list (issue #22).
+func (s *Store) RecentModels(ctx context.Context) ([]string, error) {
+	query := `SELECT DISTINCT model FROM usage_events
+		WHERE timestamp >= NOW() - interval '7 days' AND model <> '' ORDER BY model`
+	if s.RollupsReady(ctx) {
+		query = `SELECT DISTINCT model FROM usage_hourly
+			WHERE hour >= date_trunc('hour', NOW()) - interval '7 days' AND model <> '' ORDER BY model`
+	}
+	rows, err := s.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var m string
+		if err := rows.Scan(&m); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}

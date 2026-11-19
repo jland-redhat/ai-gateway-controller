@@ -1,0 +1,1348 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EnMaaS · My team</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<style>
+:root{
+  color-scheme:dark;
+  --bg:#0c0f14; --panel:#141820; --panel2:#1a2030; --border:#232b3b;
+  --text:#e2e6ec; --muted:#8090a8; --accent:#4da0f8; --accent2:#3dcc6e;
+  --saved:#3dcc6e; --warn:#eba830;
+}
+*{box-sizing:border-box}
+html{background:var(--bg)}
+body{margin:0;background:transparent;color:var(--text);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;position:relative;overflow-x:hidden}
+/* ── Subtle welcome-page background animation (issue #11) ──────────────── */
+#dashboard-flow{position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:0;opacity:.25;mix-blend-mode:screen}
+.dashboard-content{position:relative;z-index:1;max-width:1400px;margin:0 auto;padding:20px}
+a{color:inherit;text-decoration:none}
+.appbar{position:sticky;top:12px;z-index:40;display:flex;align-items:center;gap:16px;flex-wrap:wrap;
+  min-height:58px;padding:12px 22px;background:rgba(20,24,32,.96);backdrop-filter:blur(10px);
+  border:1px solid #2e3848;border-radius:10px;
+  width:100%;max-width:1360px;margin:0 auto 16px}
+.appbar .logo{display:flex;align-items:center;gap:0;font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px;font-weight:700;line-height:18px;letter-spacing:.2px;color:#e2e6ec;text-decoration:none;white-space:nowrap}
+.appbar .logo .en{color:#3dcc6e}
+.appbar .logo em{color:#4da0f8;font-style:normal}
+.appbar nav{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+.appbar nav a{display:inline-flex;align-items:center;justify-content:center;padding:6px 14px;border-radius:8px;color:#8090a8;font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:12px;font-weight:600;line-height:18px;text-decoration:none;white-space:nowrap}
+.appbar nav a:hover,.appbar nav a.on{color:#e2e6ec;background:#22262c}
+.appbar .ab-right{margin-left:auto;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.ab-user{color:var(--accent2);font-size:13px;font-weight:600}
+.ab-user .role{color:var(--muted);font-weight:400}
+.demo-pii{transition:filter .18s ease}.demo-private .demo-pii,.demo-private .person-name,.demo-private .det-name,.demo-private .det-who{filter:blur(3px);user-select:none}.ab-user{cursor:default}.ab-user.demo-privacy-active .role{color:#e8a830;font-weight:800}
+.demo-badge{display:none;align-items:center;gap:5px;border:1px solid #e8a83066;background:#e8a8301f;color:#e8a830;border-radius:999px;padding:2px 9px;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;white-space:nowrap}.demo-private .demo-badge{display:inline-flex}
+/* Demo mode is tokens-only: actual spend disappears, savings stay visible. */
+.demo-private .demo-cost{display:none!important}.demo-private #kpiBudgetTile,.demo-private #approvals,.demo-private #apprBanner{display:none!important}
+.ab-out{color:var(--warn);border:1px solid #2e3848;border-radius:8px;padding:6px 14px;font:600 12px/18px Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;text-decoration:none}
+.ab-out:hover{border-color:var(--warn)}
+@media(max-width:640px){.appbar{top:8px;padding:10px 14px;gap:10px}}
+.imp-banner{display:none;align-items:center;gap:12px;padding:8px 18px;background:#3a2c10;border-bottom:1px solid var(--warn);color:var(--warn);font-size:13px}
+.imp-banner a{margin-left:auto;border:1px solid var(--warn);border-radius:6px;padding:2px 10px}
+main{max-width:1080px;margin:0 auto;padding:22px 18px 48px}
+.head-row{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+h1{margin:0;font-size:21px}
+.sub{color:var(--muted);margin:4px 0 18px}
+.scope-note{display:flex;gap:10px;align-items:flex-start;background:rgba(235,168,48,.08);border:1px solid rgba(235,168,48,.34);
+  border-radius:10px;padding:12px 16px;margin-bottom:18px;font-size:12.5px;line-height:1.5}
+.scope-note .ico{color:var(--warn);font-size:14px;line-height:1.35;flex:0 0 auto}
+.scope-note b{color:var(--warn)}
+/* Searchable scope picker (replaces the native select). */
+.team-combo{position:relative;min-width:210px;max-width:320px}
+.team-combo-trigger{display:flex;align-items:center;gap:8px;width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:7px;padding:5px 9px;font:inherit;font-size:13px;cursor:pointer;text-align:left}
+.team-combo-trigger:hover,.team-combo-trigger:focus-visible{border-color:var(--accent2);outline:none}
+.team-combo-trigger .icon{color:var(--muted);font-size:14px;line-height:1}
+.team-combo-trigger .lbl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.team-combo-trigger .caret{flex:0 0 auto;color:var(--muted)}
+.team-combo-pop{position:absolute;z-index:60;top:calc(100% + 6px);left:0;width:min(390px,calc(100vw - 36px));max-height:min(65vh,480px);display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--border);border-radius:9px;box-shadow:0 16px 40px #0009;padding:8px}
+.team-combo-pop[hidden]{display:none}
+.team-combo-search{display:flex;align-items:center;gap:7px;background:var(--bg);border:1px solid var(--border);border-radius:7px;padding:6px 8px}
+.team-combo-search:focus-within{border-color:var(--accent2)}
+.team-combo-search .icon{color:var(--muted);font-size:14px;line-height:1}
+.team-combo-search input{flex:1;min-width:0;background:none;border:0;outline:0;color:var(--text);font:inherit;font-size:13px}
+.team-combo-search input::placeholder{color:var(--muted)}
+.team-combo-clear{background:none;border:0;color:var(--muted);cursor:pointer;font-size:16px;line-height:1;padding:0 2px}
+.team-combo-clear:hover{color:var(--text)}
+.team-combo-list{overflow:auto;margin-top:6px;padding:2px;min-height:0}
+.team-combo-opt{display:flex;align-items:flex-start;gap:7px;border-radius:6px;padding:7px 8px;font-size:13px;line-height:1.25;cursor:pointer;color:var(--text)}
+.team-combo-opt:hover,.team-combo-opt.active{background:#1b2638}
+.team-combo-opt[aria-selected="true"]{background:#1b2c44}
+.team-combo-check{flex:0 0 14px;width:14px;margin-top:1px;color:var(--accent2);font-weight:700;text-align:center}
+.team-combo-text{display:flex;flex-direction:column;gap:1px;min-width:0;flex:1}
+.team-combo-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.team-combo-sub{color:var(--muted);font-size:10.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.team-combo-badge{color:var(--accent2);border:1px solid #4da0f855;border-radius:4px;padding:0 4px;font-size:10px;margin-left:6px;vertical-align:1px}
+.team-combo-badge-person{color:var(--muted);border-color:var(--border)}
+.team-combo-empty{padding:14px 10px;color:var(--muted);font-size:12px;text-align:center}
+.team-combo-meta{padding:6px 8px 0;color:var(--muted);font-size:10.5px;text-align:right}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin:14px 0 20px}
+.kpi{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:13px 15px}
+.kpi .l{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.6px}
+.kpi .v{font-size:23px;font-weight:700;margin-top:3px}
+.kpi .s{color:var(--muted);font-size:12px}
+/* Budget gauge bar: green at ease, yellow when close, red over. */
+.kbar{height:8px;background:var(--panel2);border:1px solid var(--border);border-radius:5px;margin:9px 0 7px;overflow:hidden}
+.kbar i{display:block;height:100%;width:0;border-radius:4px;background:var(--accent2);transition:width .3s}
+.kbar.warn i{background:var(--warn)}
+.kbar.over i{background:#e8554e}
+.panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:15px 16px;margin-bottom:18px}
+.panel h2{margin:0 0 10px;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.7px}
+/* Usage-style pie row (Hosted vs Vendor / By Model / By User) */
+.charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:0 14px}
+.charts .panel{min-width:0}
+.chart-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.tlt{display:inline-flex;gap:2px;margin-left:auto}
+.tlt button{background:none;border:1px solid var(--border);color:var(--muted);border-radius:6px;padding:2px 8px;font-size:11px;cursor:pointer}
+.tlt button.on{background:var(--panel2);color:var(--text);border-color:var(--accent)}
+.refsel{background:var(--panel2);color:var(--accent2);border:1px solid var(--border);border-radius:6px;padding:2px 6px;font-size:11px;max-width:170px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{color:var(--muted);text-align:left;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.5px;padding:6px 8px;border-bottom:1px solid var(--border);cursor:pointer;user-select:none;white-space:nowrap}
+td{padding:7px 8px;border-bottom:1px solid var(--border)}
+tr:last-child td{border-bottom:none}
+tr.clickable{cursor:pointer}
+tr.clickable:hover td{background:var(--panel2)}
+tr.clickable:hover .person-name{color:var(--accent)}
+.person-cell{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.person-chev{color:var(--muted);opacity:.45;font-size:15px;flex:0 0 auto}
+tr.clickable:hover .person-chev{opacity:1;color:var(--accent)}
+.num{text-align:right;font-variant-numeric:tabular-nums}
+td.num{text-align:right}
+.dim{color:var(--muted)}
+.mgr{color:var(--accent);font-size:11px}
+.pill{display:inline-block;font-size:10.5px;padding:1px 7px;border-radius:99px;border:1px solid var(--border);color:var(--muted)}
+.pill.zero{color:var(--warn)}
+.hosted{color:var(--accent2);font-size:11px}
+.self-note{background:var(--panel);border:1px dashed var(--border);border-radius:10px;padding:14px 16px;color:var(--muted);margin:14px 0}
+.err{color:#f2777a}
+/* Quota gauges + approval inbox */
+.over{color:#f2777a}
+.gauge{display:inline-block;position:relative;height:6px;background:var(--panel2);border:1px solid var(--border);border-radius:4px;margin-top:4px;width:130px}
+.gauge i{position:absolute;left:0;top:0;bottom:0;border-radius:3px;background:var(--accent2)}
+.gauge.warn i{background:var(--warn)}
+.gauge.over i{background:#e8554e}
+.chip-over{display:inline-block;font-size:10px;padding:0 6px;border-radius:99px;border:1px solid #e8554e;color:#f2777a;margin-left:6px}
+.appr{background:none;border:1px solid var(--border);color:var(--text);border-radius:7px;padding:3px 10px;cursor:pointer;font-size:12px}
+.appr.ok{border-color:var(--accent2);color:var(--accent2)}
+.appr.no{border-color:#e8554e;color:#f2777a}
+.appr:hover{background:var(--panel2)}
+.appr-row{display:flex;align-items:flex-start;gap:12px;padding:9px 4px;border-bottom:1px solid var(--border);flex-wrap:wrap}
+.appr-row:last-child{border-bottom:none}
+.appr-act{margin-left:auto;display:flex;gap:6px;align-items:center}
+/* Full-questionnaire block shown inline on each pending request. */
+.appr-qs{margin-top:8px;display:grid;gap:6px;max-width:640px}
+.appr-qa{font-size:12.5px;color:var(--text);line-height:1.45}
+.appr-ql{display:inline-block;min-width:150px;color:var(--text2);font-size:10px;text-transform:uppercase;letter-spacing:.5px;vertical-align:top;margin-right:8px}
+.appr-feas{display:inline-block;font-size:11px;font-weight:600;border-radius:5px;padding:1px 8px;vertical-align:middle}
+.appr-feas.yes{color:var(--accent2);border:1px solid var(--accent2)}
+.appr-feas.no{color:#f2777a;border:1px solid #e8554e}
+.saved-pos{color:var(--saved)}
+/* Person detail modal */
+.det-ov{display:none;position:fixed;inset:0;background:rgba(5,7,10,.72);z-index:70;align-items:flex-start;justify-content:center;padding:40px 14px}
+.det-ov.show{display:flex}
+.det-card{background:var(--panel);border:1px solid var(--border);border-radius:12px;max-width:900px;width:100%;padding:18px 20px;max-height:calc(100vh - 80px);overflow:auto}
+.det-head{display:flex;align-items:flex-start;gap:12px;margin-bottom:12px}
+.det-name{font-size:18px;font-weight:700}
+.det-who{color:var(--muted);font-size:12px;margin-top:2px}
+.det-close{margin-left:auto;background:none;border:1px solid var(--border);color:var(--muted);border-radius:7px;padding:3px 9px;cursor:pointer}
+.det-close:hover{color:var(--text)}
+.det-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:14px}
+.det-kpi{background:var(--panel2);border:1px solid var(--border);border-radius:9px;padding:9px 12px}
+.det-kpi .l{color:var(--muted);font-size:10.5px;text-transform:uppercase;letter-spacing:.5px}
+.det-kpi .v{font-size:18px;font-weight:700;margin-top:2px}
+.det-note{color:var(--muted);font-size:12px;margin-top:10px}
+/* Pricing modal (shared across pages) */
+.pm-ov{display:none;position:fixed;inset:0;background:rgba(5,7,10,.72);z-index:60;align-items:flex-start;justify-content:center;padding:40px 14px}
+.pm-ov.show{display:flex}
+.pm-card{background:var(--panel);border:1px solid var(--border);border-radius:12px;max-width:900px;width:100%;padding:14px 18px;max-height:calc(100vh - 80px);overflow:auto}
+.pm-head{display:flex;align-items:center;gap:12px;margin-bottom:8px}
+.pm-title{font-size:16px;font-weight:700}
+.pm-sub{color:var(--muted);font-size:12px}
+.pm-opts{margin-left:auto;display:flex;align-items:center;gap:10px;color:var(--muted);font-size:12px}
+.pm-close{background:none;border:1px solid var(--border);color:var(--muted);border-radius:7px;padding:3px 9px;cursor:pointer}
+.pm-body table{font-size:12.5px}
+.pm-zero{color:var(--muted)}
+.pm-host{color:var(--accent2);font-size:10.5px;margin-left:6px;border:1px solid var(--border);border-radius:99px;padding:0 6px}
+.pm-free{display:inline-block;color:#3dcc6e;background:rgba(61,204,110,.14);border:1px solid rgba(61,204,110,.5);border-radius:99px;padding:3px 10px;font-size:12px;font-weight:800;white-space:nowrap}
+.pm-discount{display:inline-block;color:#58a6ff;background:rgba(88,166,255,.12);border:1px solid rgba(88,166,255,.5);border-radius:99px;padding:3px 10px;font-size:12px;font-weight:800;white-space:nowrap}
+.pm-none{color:var(--muted);font-size:10px;white-space:nowrap}
+.pm-list{color:var(--muted);font-size:11px}
+</style>
+</head>
+<body>
+<!-- Decorative only: keep this block easy to remove if the effect is not useful. -->
+<canvas id="dashboard-flow" aria-hidden="true"></canvas>
+<div class="dashboard-content">
+<header class="appbar">
+  <a class="logo" href="/manager"><span class="en">En</span><em>MaaS</em></a>
+  <nav>
+    <a href="/account">My usage</a>
+    <a href="/account?tab=keys">API keys</a>
+    <a href="/dashboard" id="tab-org" style="display:none" title="Usage for the whole organisation">Org usage</a>
+    <a href="/manager" class="on" title="Usage for everyone on your team">My team</a>
+    <a href="/routing" id="tab-routing" style="display:none">Routing</a>
+    <a href="/admin" id="tab-admin" style="display:none">Admin</a>
+  </nav>
+  <div class="ab-right">
+    <button class="ab-out" style="border-color:var(--accent);color:var(--accent);display:none" id="my-view-btn" title="See the dashboard as a regular user would">My view as user</button>
+    <button class="ab-out" style="color:var(--text)" onclick="openPricing()">Pricing</button>
+    <span class="demo-badge" id="demoBadge">Demo mode · costs hidden</span>
+    <span class="ab-user" id="abUser"></span>
+    <a class="ab-out" href="/logout">Sign out</a>
+  </div>
+</header>
+<div class="imp-banner" id="banner"><span id="bannerText"></span><a href="/admin/impersonate?as=" id="bannerClear">Back to myself</a></div>
+
+<!-- Model pricing modal (shared across pages) -->
+<div class="pm-ov" id="pricing-ov" onclick="if(event.target===this)closePricing()">
+  <div class="pm-card">
+    <div class="pm-head">
+      <span class="pm-title">Model pricing</span>
+      <span class="pm-sub">$ per million tokens</span>
+      <span class="pm-opts">
+        <label style="display:flex;align-items:center;gap:5px;cursor:pointer"><input type="checkbox" id="pm-all" onchange="loadPricing()" title="Off: only models you have used, plus hosted models. On: every model in the price list, even ones with no usage yet."> Show price list for unused models too</label>
+        <button class="pm-close" onclick="closePricing()" aria-label="Close">✕</button>
+      </span>
+    </div>
+    <div class="pm-body" id="pm-body"><div class="pm-sub" style="padding:14px 0">Loading…</div></div>
+  </div>
+</div>
+<main>
+  <div class="scope-note" role="note">
+    <span class="ico" aria-hidden="true">ⓘ</span>
+    <div><b>EnMaaS usage.</b> This page shows the usage recorded by this EnMaaS deployment for the people in this view. It does not include other AI tools or platforms; check those tools for their usage and cost.</div>
+  </div>
+
+  <div class="head-row">
+    <h1 id="scopeTitle">Team view</h1>
+    <div id="teamFilter" class="team-combo" style="display:none">
+      <button id="teamFilterBtn" class="team-combo-trigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="teamFilterPop" title="Focus on a team or person">
+        <svg class="icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10.5 10.5 14 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        <span id="teamFilterLabel" class="lbl">Whole organisation</span>
+        <svg class="caret" viewBox="0 0 10 6" width="10" height="6" aria-hidden="true"><path d="M1 1l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <div id="teamFilterPop" class="team-combo-pop" hidden>
+        <div class="team-combo-search">
+          <svg class="icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10.5 10.5 14 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          <input id="teamFilterSearch" type="text" role="combobox" aria-autocomplete="list" aria-controls="teamFilterList" aria-label="Search anyone by name or username" aria-expanded="false" autocomplete="off" spellcheck="false" placeholder="Search anyone by name or username…">
+          <button id="teamFilterClear" class="team-combo-clear" type="button" aria-label="Clear search" hidden>×</button>
+        </div>
+        <div id="teamFilterList" class="team-combo-list" role="listbox" aria-label="People and teams"></div>
+        <div id="teamFilterMeta" class="team-combo-meta" aria-live="polite"></div>
+      </div>
+    </div>
+    <div class="ranges" id="ranges" style="margin-left:auto;display:flex;gap:2px">
+      <button data-r="24h" style="background:none;border:1px solid var(--border);color:var(--muted);border-radius:7px;padding:4px 10px;cursor:pointer;font-size:12.5px">24h</button>
+      <button data-r="7d" style="background:none;border:1px solid var(--border);color:var(--muted);border-radius:7px;padding:4px 10px;cursor:pointer;font-size:12.5px">7d</button>
+      <button data-r="30d" style="background:none;border:1px solid var(--border);color:var(--muted);border-radius:7px;padding:4px 10px;cursor:pointer;font-size:12.5px">30d</button>
+      <button data-r="mtd" class="on" style="background:none;border:1px solid var(--border);color:var(--muted);border-radius:7px;padding:4px 10px;cursor:pointer;font-size:12.5px" title="Month to date">MTD</button>
+    </div>
+  </div>
+  <p class="sub" id="scopeSub">Loading…</p>
+  <div id="selfNote"></div>
+  <div class="kpis">
+    <div class="kpi" id="kpiBudgetTile"><div class="l" id="kBudgetL">Team budget</div><div class="v" id="kBudget">–</div><div class="kbar"><i id="kBudgetBar"></i></div><div class="s" id="kBudgetS"></div></div>
+    <div class="kpi"><div class="l">Saved · Hosted Models</div><div class="v saved-pos" id="kSaved">–</div><div class="s">vs <select class="refsel" id="refSel" onchange="savingsRef=this.value;loadCharts();"></select><span id="kSavedNote"></span></div></div>
+    <div class="kpi" id="kpiMembers"><div class="l">Members</div><div class="v" id="kPeople">–</div><div class="s" id="kPeopleS"></div></div>
+  </div>
+  <!-- Pending-decisions banner: same role as the user's "request pending"
+       banner, mirrored for the approver side. Sits above the KPIs so it
+       reads on arrival, and jumps to the inbox on click. -->
+  <div id="apprBanner" style="display:none;align-items:center;gap:10px;border:1px solid #58a6ff66;background:#58a6ff1f;border-radius:8px;padding:10px 16px;margin-bottom:16px;font-size:12px;color:#cfe3ff">
+    <span id="apprBannerText" style="flex:1"></span>
+    <button onclick="document.getElementById('approvals').scrollIntoView({behavior:'smooth'})"
+      style="background:none;border:1px solid #58a6ff;border-radius:6px;padding:3px 10px;color:#58a6ff;font-size:11px;cursor:pointer;font-family:inherit">Review requests ↓</button>
+  </div>
+  <div class="panel" id="approvals" style="display:none">
+    <h2>Approval requests <span id="apprCount" class="dim" style="text-transform:none;letter-spacing:0;font-weight:400"></span> <span class="dim" style="text-transform:none;letter-spacing:0;font-weight:400">— over-limit budget asks from your team</span></h2>
+    <div id="apprBody"></div>
+  </div>
+  <div class="charts" id="chartsRow">
+    <div class="panel"><h2>Token Usage · Hosted vs Vendor</h2><canvas id="hvChart" height="170"></canvas></div>
+    <div class="panel">
+      <h2 class="chart-head"><span>By Model</span><span class="tlt" id="mmToggle">
+        <button data-mm="cost" class="demo-cost">Cost</button><button data-mm="tokens" class="on">Tokens</button><button data-mm="requests">Requests</button>
+      </span></h2>
+      <canvas id="modelChart" height="170"></canvas>
+    </div>
+    <div class="panel">
+      <h2 class="chart-head"><span>By User</span><span class="tlt" id="umToggle">
+        <button data-um="cost" class="on demo-cost">Cost</button><button data-um="tokens">Tokens</button><button data-um="requests">Requests</button>
+      </span></h2>
+      <canvas id="userChart" height="170"></canvas>
+    </div>
+  </div>
+  <div class="panel">
+    <h2 class="chart-head"><span>Daily model usage</span><span class="tlt" id="tlToggle">
+      <button data-tm="tokens" class="on">Tokens</button><button data-tm="cost" class="demo-cost">Dollars</button>
+    </span></h2>
+    <canvas id="tl" height="70"></canvas>
+  </div>
+  <div class="panel">
+    <h2><span id="membersTitle">Team members</span> <span class="dim" style="text-transform:none;letter-spacing:0;font-weight:400">— click a person for their per-model breakdown</span></h2>
+    <div style="overflow-x:auto">
+    <table>
+      <thead><tr>
+        <th data-s="FullName">Person</th>
+        <th class="num demo-cost" data-s="CostUSD">Spend</th>
+        <th class="num" data-s="TotalTokens">Tokens</th>
+        <th class="num" data-s="Requests">Requests</th>
+        <th data-s="LastUsed">Last used</th>
+        <th class="num demo-cost" data-s="quota_spent_usd" title="Month-to-date spend against the monthly limit (the limit's window is always the calendar month, whatever range is selected)">Budget</th>
+      </tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    </div>
+    <p id="policyNote" class="dim" style="margin-top:10px;font-size:12px" hidden></p>
+  </div>
+</main>
+
+</div>
+
+<!-- Per-person drill-down: one member's spend broken down by model -->
+<div class="det-ov" id="det-ov" onclick="if(event.target===this)closeDetail()">
+  <div class="det-card" role="dialog" aria-modal="true" aria-label="Person usage detail">
+    <div class="det-head">
+      <div>
+        <div class="det-name" id="detName">–</div>
+        <div class="det-who" id="detWho"></div>
+      </div>
+      <button class="det-close" onclick="closeDetail()" aria-label="Close">✕</button>
+    </div>
+    <div class="det-kpis">
+      <div class="det-kpi demo-cost"><div class="l">Spend</div><div class="v" id="dSpend">–</div></div>
+      <div class="det-kpi"><div class="l">Tokens</div><div class="v" id="dTokens">–</div></div>
+      <div class="det-kpi"><div class="l">Requests</div><div class="v" id="dReqs">–</div></div>
+      <div class="det-kpi"><div class="l">Saved · hosted</div><div class="v saved-pos" id="dSaved">–</div></div>
+      <div class="det-kpi"><div class="l">Models</div><div class="v" id="dModels">–</div></div>
+    </div>
+    <div class="det-body" id="detBody"><div class="pm-sub" style="padding:14px 0">Loading…</div></div>
+    <div class="det-note" id="detNote"></div>
+  </div>
+</div>
+<!-- ── Subtle welcome-page background animation (issue #11) ────────────── -->
+<script>
+(function(){
+  "use strict";
+  var canvas=document.getElementById("dashboard-flow");
+  if(!canvas||!canvas.getContext)return;
+
+  var reduced=window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var ctx=canvas.getContext("2d");
+  var dpr=Math.min(window.devicePixelRatio||1,2);
+  var width=0,height=0,gate=0,running=!reduced&&!document.hidden,frameId=null;
+  var tokens=[];
+  var glyphs=["tok","{ }","42","1010","⧉",">>","…"];
+  var prices=["$0.15","$0.47","$0.016","$1.20"];
+
+  function resize(){
+    width=window.innerWidth;height=window.innerHeight;
+    canvas.width=width*dpr;canvas.height=height*dpr;
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    gate=Math.max(36,Math.min(width-36,width*.5));
+  }
+  function spawn(){
+    return {x:-28,y:24+Math.random()*Math.max(1,height-48),
+      vx:.18+Math.random()*.38,g:glyphs[(Math.random()*glyphs.length)|0],
+      priced:false,stamp:prices[(Math.random()*prices.length)|0],born:0,alpha:0};
+  }
+  function schedule(){
+    if(running&&frameId===null)frameId=window.requestAnimationFrame(draw);
+  }
+  function draw(ts){
+    frameId=null;
+    if(!running&&!reduced)return;
+    ctx.clearRect(0,0,width,height);
+    var line="rgba(88,166,255,.42)",soft="rgba(169,182,198,.68)",price="rgba(112,184,255,.9)";
+    var glow=ctx.createLinearGradient(gate-28,0,gate+28,0);
+    glow.addColorStop(0,"rgba(88,166,255,0)");
+    glow.addColorStop(.5,"rgba(88,166,255,.07)");
+    glow.addColorStop(1,"rgba(88,166,255,0)");
+    ctx.fillStyle=glow;ctx.fillRect(gate-28,0,56,height);
+    ctx.strokeStyle=line;ctx.lineWidth=1;ctx.setLineDash([3,7]);
+    ctx.beginPath();ctx.moveTo(gate,0);ctx.lineTo(gate,height);ctx.stroke();ctx.setLineDash([]);
+    ctx.textBaseline="middle";
+
+    for(var i=0;i<tokens.length;i++){
+      var token=tokens[i];
+      if(!token.priced&&token.x>=gate){token.priced=true;token.born=ts;}
+      token.x+=token.vx*(token.priced?.35:1);
+      token.alpha=Math.min(token.alpha+.02,1);
+      ctx.globalAlpha=token.alpha*(token.priced?.7:.55);
+      ctx.fillStyle=token.priced?price:soft;
+      ctx.font=token.priced?'500 11px ui-monospace,SFMono-Regular,Menlo,monospace':'400 11px ui-monospace,SFMono-Regular,Menlo,monospace';
+      ctx.fillText(token.priced?token.stamp:token.g,token.x,token.y);
+      ctx.globalAlpha=1;
+      if((token.priced&&ts-token.born>3600)||token.x>width+40)tokens[i]=spawn();
+    }
+    schedule();
+  }
+
+  resize();
+  window.addEventListener("resize",resize,{passive:true});
+  for(var i=0;i<80;i++){var token=spawn();token.x=Math.random()*gate;tokens.push(token);}
+  if(reduced)draw(0);else schedule();
+  document.addEventListener("visibilitychange",function(){
+    if(reduced)return;
+    if(document.hidden){
+      running=false;
+      if(frameId!==null){window.cancelAnimationFrame(frameId);frameId=null;}
+    }else{
+      running=true;
+      schedule();
+    }
+  });
+})();
+</script>
+<script>
+// 2 decimals here on purpose: this view shows per-person period totals and
+// team KPI tiles, never per-request rows, so sub-cent rounding is irrelevant.
+const fmt$=v=>'$'+Number(v||0).toLocaleString(undefined,{maximumFractionDigits:2});
+const fmtTok=v=>{v=Number(v||0);if(v>=1e9)return (v/1e9).toFixed(2)+'B';if(v>=1e6)return (v/1e6).toFixed(2)+'M';if(v>=1e3)return (v/1e3).toFixed(1)+'K';return ''+v};
+let range='mtd', rows=[], tlChart=null, sortKey='CostUSD', sortDir=-1, me={}, drillSlug='';
+let tlMetric='tokens'; // 'tokens' | 'cost' — the Daily model usage toggle
+
+document.getElementById('ranges').addEventListener('click',e=>{
+  const b=e.target.closest('button'); if(!b)return;
+  range=b.dataset.r;
+  document.querySelectorAll('#ranges button').forEach(x=>x.classList.toggle('on',x===b));
+  load();
+});
+document.querySelector('thead').addEventListener('click',e=>{
+  const th=e.target.closest('th'); if(!th||!th.dataset.s)return;
+  if(sortKey===th.dataset.s)sortDir=-sortDir; else {sortKey=th.dataset.s;sortDir=-1;}
+  renderRows();
+});
+
+function esc(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+
+function renderRows(){
+  const tb=document.getElementById('rows');
+  rows.sort((a,b)=>{
+    const x=a[sortKey]??-1,y=b[sortKey]??-1;
+    return (typeof x==='string'? x.localeCompare(y) : x-y)*sortDir;
+  });
+  tb.innerHTML=rows.map(r=>`<tr class="${r.no_identity?'':'clickable'}" data-slug="${esc(r.slug)}"${r.no_identity?' style="opacity:.55"':''}>
+    <td><div class="person-cell"><span><span class="person-name">${esc(r.full_name)}</span>${r.is_manager?' <span class="mgr">· mgr</span>':''}${r.no_identity?' <span class="pill zero">no key yet</span>':''}</span>${r.no_identity?'':'<span class="person-chev">›</span>'}</div></td>
+    <td class="num demo-cost">${r.username?fmt$(r.cost_usd):'<span class="dim">–</span>'}</td>
+    <td class="num">${r.username?fmtTok(r.total_tokens):''}</td>
+    <td class="num">${r.requests||''}</td>
+    <td class="dim">${r.last_used?r.last_used.slice(0,10):'never'}</td>
+    <td class="num demo-cost">${budgetCell(r)}</td>
+  </tr>`).join('')||'<tr><td colspan="6" class="dim">No usage yet — expected during week one.</td></tr>';
+}
+
+// Month-to-date vs the monthly limit, as a bar plus the two numbers. The
+// numbers arrive from the server (quota_spent_usd / quota_usd, calendar
+// month regardless of the selected range); width caps at 100%.
+function budgetCell(r){
+  if(!r.quota_usd)return '<span class="dim">–</span>';
+  const pct=Math.min(100,100*(r.quota_spent_usd||0)/r.quota_usd);
+  const cls=r.over_limit?'over':(pct>=80?'warn':'');
+  return `<div style="display:inline-flex;flex-direction:column;align-items:flex-end">
+    <span${r.over_limit?' class="over"':''}>${fmt$(r.quota_spent_usd)} / ${fmt$(r.quota_usd)}${r.over_limit?'<span class="chip-over">over</span>':''}</span>
+    <span class="gauge ${cls}"><i style="width:${pct}%"></i></span></div>`;
+}
+
+// Drill into one team's branch or one person's usage. The server re-checks
+// that the root is inside the caller's subtree, so a bad slug just yields a
+// 403 -> error row.
+function drillTo(slug){
+  if(slug===drillRoot)slug=''; // drilling into one's own root IS the whole team
+  drillSlug=slug;
+  if(slug){
+    const m=rows0.find(r=>r.slug===slug);
+    const name=m?(m.full_name||m.username||m.slug):'Team';
+    document.getElementById('scopeTitle').innerHTML='<span class="demo-pii">'+esc(name)+'</span>'+(m&&!m.is_manager?'’s usage':'’s team');
+  } else {
+    document.getElementById('scopeTitle').textContent=defaultTitle();
+  }
+  buildFilter();
+  load();
+}
+function defaultTitle(){ return adminScope ? 'Org view' : 'Team view' }
+let rows0=[]; // full (undrilled) roster, kept for filter labels/titles
+let teamOptions=[], teamMatched=[], teamActive=-1;
+const TEAM_SEARCH_LIMIT=200;
+
+function teamNorm(s){
+  return String(s??'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+}
+function teamPath(r,bySlug){
+  const out=[]; let cur=r; const seen=new Set();
+  while(cur.manager_slug&&!seen.has(cur.manager_slug)){
+    seen.add(cur.manager_slug);
+    const p=bySlug?bySlug.get(cur.manager_slug):rows0.find(x=>x.slug===cur.manager_slug);
+    if(!p)break;
+    out.unshift(p.full_name||p.username||p.slug);
+    cur=p;
+  }
+  return out;
+}
+function teamIsOpen(){
+  const pop=document.getElementById('teamFilterPop');
+  return !!pop&&!pop.hidden;
+}
+function positionTeamPopover(){
+  const combo=document.getElementById('teamFilter');
+  const pop=document.getElementById('teamFilterPop');
+  if(!combo||!pop||pop.hidden)return;
+  pop.style.left='0px';
+  const cr=combo.getBoundingClientRect(), pr=pop.getBoundingClientRect();
+  const pad=16;
+  if(cr.left+pr.width>window.innerWidth-pad){
+    pop.style.left=Math.min(0,window.innerWidth-pad-pr.width-cr.left)+'px';
+  }
+}
+function buildFilter(){
+  const combo=document.getElementById('teamFilter');
+  const people=rows0.filter(r=>r.slug!==drillRoot);
+  // With no reports and no active person root there is nothing to focus.
+  if(!people.length&&!drillSlug){combo.style.display='none';closeTeamCombo(false);return;}
+  const whole=adminScope?'Whole organisation':'Whole team';
+  const selected=rows0.find(r=>r.slug===drillSlug);
+  const label=selected?(selected.full_name||selected.username||selected.slug):(drillSlug?'Team':whole);
+  const lbl=document.getElementById('teamFilterLabel');
+  lbl.textContent='';
+  if(selected&&demoPrivacyEnabled()){
+    const span=document.createElement('span');
+    span.className='demo-pii';
+    span.textContent=label;
+    lbl.appendChild(span);
+    lbl.title=demoUserName(label,0);
+  }else{
+    lbl.textContent=label;
+    lbl.title=label;
+  }
+  people.sort((a,b)=>String(a.full_name||a.username||a.slug).localeCompare(String(b.full_name||b.username||b.slug)));
+  const bySlug=new Map(rows0.map(r=>[r.slug,r]));
+  teamOptions=[{slug:'',name:whole,username:'',path:[],root:true}].concat(people.map(r=>({
+    slug:r.slug,
+    name:r.full_name||r.username||r.slug,
+    username:r.username||'',
+    path:teamPath(r,bySlug),
+    managerSlug:r.manager_slug||'',
+    manager:!!r.is_manager
+  })));
+  combo.style.display='';
+  if(teamIsOpen())renderTeamOptions();
+}
+function teamScore(o,terms){
+  if(!terms.length)return 0;
+  if(o.root){
+    const hay=teamNorm(o.name+(adminScope?' organisation organization all':' team all')+' teams everyone');
+    return terms.every(t=>hay.includes(t))?0:-1;
+  }
+  const name=teamNorm(o.name), user=teamNorm(o.username), path=teamNorm((o.path||[]).join(' '));
+  let score=0;
+  for(const term of terms){
+    const inName=name.indexOf(term), inUser=user.indexOf(term), inPath=path.indexOf(term);
+    if(inName<0&&inUser<0&&inPath<0)return -1;
+    if(name===term||user===term)score+=0;
+    else if(name.startsWith(term)||user.startsWith(term))score+=1;
+    else if(name.split(/\s+/).some(w=>w.startsWith(term)))score+=2;
+    else score+=3;
+  }
+  return score;
+}
+function teamDisplayName(o){
+  const n=o.name||'';
+  return (o.root||!demoPrivacyEnabled())?esc(n):'<span class="demo-pii">'+esc(n)+'</span>';
+}
+function teamSubParts(o){
+  if(o.root){
+    const text=adminScope?'All teams and people in the organisation':'Everyone in your team';
+    return {html:esc(text),text};
+  }
+  const kind=o.manager?'Team':'Person';
+  let html,text;
+  if(o.path&&o.path.length){
+    html=kind+' · ↳ under '+o.path.map(n=>demoPrivacyEnabled()?'<span class="demo-pii">'+esc(n)+'</span>':esc(n)).join(' › ');
+    text=kind+' · ↳ under '+o.path.map(n=>demoPrivacyEnabled()?demoUserName(n,0):n).join(' › ');
+  }else{
+    text=o.managerSlug?kind+' · manager outside this view':(o.manager?'Top-level manager':'Person · no manager listed');
+    html=esc(text);
+  }
+  let tailHtml='',tailText='';
+  if(!o.username){tailText=' · no key yet';tailHtml=esc(tailText);}
+  else if(!demoPrivacyEnabled()&&teamNorm(o.username)!==teamNorm(o.name)){tailText=' · @'+o.username;tailHtml=esc(tailText);}
+  return {html:html+tailHtml,text:text+tailText};
+}
+function renderTeamOptions(){
+  const search=document.getElementById('teamFilterSearch');
+  const list=document.getElementById('teamFilterList');
+  const meta=document.getElementById('teamFilterMeta');
+  const q=teamNorm(search.value.trim());
+  const terms=q?q.split(/\s+/).filter(Boolean):[];
+  let ranked=teamOptions.map(opt=>({opt,score:teamScore(opt,terms)})).filter(x=>x.score>=0);
+  const rootOpt=teamOptions.find(o=>o.root);
+  let rootMatched=false;
+  if(terms.length){
+    ranked.sort((a,b)=>a.score-b.score||a.opt.name.localeCompare(b.opt.name));
+    const rootEntry=rootOpt?ranked.find(x=>x.opt===rootOpt):null;
+    rootMatched=!!rootEntry;
+    // Keep the whole-organisation/whole-team reset option pinned when the
+    // query has any results, but leave an honest empty state when it doesn't.
+    if(rootEntry||ranked.some(x=>!x.opt.root)){
+      if(rootEntry){
+        const i=ranked.indexOf(rootEntry);
+        if(i>0)ranked.splice(0,0,ranked.splice(i,1)[0]);
+      }else if(rootOpt)ranked.unshift({opt:rootOpt,score:0});
+    }
+  }else{
+    ranked=ranked.filter(x=>x.opt.root||x.opt.manager||x.opt.slug===drillSlug);
+    const selectedIndex=ranked.findIndex(x=>x.opt.slug===drillSlug);
+    if(selectedIndex>1)ranked.splice(1,0,ranked.splice(selectedIndex,1)[0]);
+  }
+  const shown=ranked.slice(0,TEAM_SEARCH_LIMIT);
+  const matchTotal=ranked.filter(x=>!x.opt.root).length+(rootMatched?1:0);
+  const matchShown=shown.filter(x=>!x.opt.root).length+(rootMatched?1:0);
+  const managerTotal=ranked.filter(x=>x.opt.manager).length;
+  const managerShown=shown.filter(x=>x.opt.manager).length;
+  teamMatched=shown.map(x=>x.opt);
+  let activeIndex=drillSlug?teamMatched.findIndex(o=>o.slug===drillSlug):-1;
+  if(activeIndex<0&&terms.length)activeIndex=teamMatched.findIndex(o=>!o.root);
+  if(activeIndex<0)activeIndex=teamMatched.length?0:-1;
+  teamActive=activeIndex;
+  list.innerHTML=shown.length?shown.map((x,i)=>{
+    const o=x.opt, sel=o.slug===drillSlug, sub=teamSubParts(o);
+    const nameText=(o.root||!demoPrivacyEnabled())?o.name:demoUserName(o.name,0);
+    const badge=o.root?'':(o.manager?'<span class="team-combo-badge">team</span>':'<span class="team-combo-badge team-combo-badge-person">person</span>');
+    return '<div id="teamFilterOpt-'+i+'" class="team-combo-opt" role="option" aria-selected="'+sel+'" data-slug="'+esc(o.slug)+'" data-index="'+i+'" aria-label="'+esc(nameText+(sub.text?', '+sub.text:''))+'">'
+      +'<span class="team-combo-check" aria-hidden="true">'+(sel?'✓':'')+'</span>'
+      +'<span class="team-combo-text"><span class="team-combo-name">'+teamDisplayName(o)+badge+'</span><span class="team-combo-sub" title="'+esc(sub.text)+'">'+sub.html+'</span></span></div>';
+  }).join(''):'<div class="team-combo-empty">No people or teams match “'+esc(search.value.trim())+'”.</div>';
+  meta.textContent=terms.length
+    ? (matchTotal?(matchTotal>matchShown?'Showing '+matchShown+' of '+matchTotal+' matches':matchTotal+' match'+(matchTotal===1?'':'es')):'No matches')
+    : (managerTotal?(managerTotal>managerShown?'Showing '+managerShown+' of '+managerTotal+' managers · type to search all people':managerTotal+' manager'+(managerTotal===1?'':'s')+' · type to search all people'):'Type to search all people');
+  syncTeamActive();
+}
+function syncTeamActive(){
+  const list=document.getElementById('teamFilterList');
+  const search=document.getElementById('teamFilterSearch');
+  const nodes=list.querySelectorAll('.team-combo-opt');
+  nodes.forEach((n,i)=>n.classList.toggle('active',i===teamActive));
+  const active=nodes[teamActive];
+  if(active){search.setAttribute('aria-activedescendant',active.id);active.scrollIntoView({block:'nearest'});}
+  else search.removeAttribute('aria-activedescendant');
+}
+function moveTeamActive(delta){
+  if(!teamMatched.length)return;
+  teamActive=(teamActive+delta+teamMatched.length)%teamMatched.length;
+  syncTeamActive();
+}
+function openTeamCombo(){
+  if(!teamOptions.length)return;
+  const pop=document.getElementById('teamFilterPop');
+  const btn=document.getElementById('teamFilterBtn');
+  const search=document.getElementById('teamFilterSearch');
+  const clear=document.getElementById('teamFilterClear');
+  pop.hidden=false; btn.setAttribute('aria-expanded','true'); search.setAttribute('aria-expanded','true');
+  search.value=''; clear.hidden=true;
+  renderTeamOptions();
+  positionTeamPopover();
+  requestAnimationFrame(()=>{positionTeamPopover();search.focus();});
+}
+function closeTeamCombo(focus){
+  const pop=document.getElementById('teamFilterPop');
+  const btn=document.getElementById('teamFilterBtn');
+  if(pop.hidden)return;
+  pop.hidden=true; btn.setAttribute('aria-expanded','false');
+  const search=document.getElementById('teamFilterSearch');
+  search.setAttribute('aria-expanded','false'); search.removeAttribute('aria-activedescendant');
+  if(focus)btn.focus();
+}
+function chooseTeam(slug){
+  closeTeamCombo(true);
+  drillTo(slug);
+}
+function setupTeamCombobox(){
+  const combo=document.getElementById('teamFilter');
+  const btn=document.getElementById('teamFilterBtn');
+  const pop=document.getElementById('teamFilterPop');
+  const search=document.getElementById('teamFilterSearch');
+  const list=document.getElementById('teamFilterList');
+  const clear=document.getElementById('teamFilterClear');
+  if(!combo||!btn||!pop||!search||!list||!clear)return;
+  btn.addEventListener('click',e=>{e.stopPropagation();pop.hidden?openTeamCombo():closeTeamCombo(true);});
+  btn.addEventListener('keydown',e=>{
+    if(e.key==='ArrowDown'||e.key==='Enter'||e.key===' '){e.preventDefault();openTeamCombo();}
+  });
+  search.addEventListener('input',()=>{clear.hidden=!search.value;renderTeamOptions();});
+  search.addEventListener('keydown',e=>{
+    if(e.key==='ArrowDown'){e.preventDefault();moveTeamActive(1);}
+    else if(e.key==='ArrowUp'){e.preventDefault();moveTeamActive(-1);}
+    else if(e.key==='Home'&&!search.value){e.preventDefault();if(teamMatched.length){teamActive=0;syncTeamActive();}}
+    else if(e.key==='End'&&!search.value){e.preventDefault();if(teamMatched.length){teamActive=teamMatched.length-1;syncTeamActive();}}
+    else if(e.key==='PageDown'){e.preventDefault();moveTeamActive(10);}
+    else if(e.key==='PageUp'){e.preventDefault();moveTeamActive(-10);}
+    else if(e.key==='Enter'){e.preventDefault();const opt=teamMatched[teamActive];if(opt)chooseTeam(opt.slug);}
+    else if(e.key==='Escape'){e.preventDefault();closeTeamCombo(true);}
+    else if(e.key==='Tab'){closeTeamCombo(false);}
+  });
+  list.addEventListener('mousedown',e=>{
+    if(e.button!==0)return;
+    const opt=e.target.closest('.team-combo-opt');
+    if(!opt)return;
+    e.preventDefault();
+    chooseTeam(opt.dataset.slug);
+  });
+  list.addEventListener('mousemove',e=>{
+    const opt=e.target.closest('.team-combo-opt');
+    if(!opt)return;
+    const i=Number(opt.dataset.index);
+    if(i!==teamActive){teamActive=i;syncTeamActive();}
+  });
+  clear.addEventListener('click',()=>{search.value='';clear.hidden=true;renderTeamOptions();search.focus();});
+  document.addEventListener('mousedown',e=>{if(!pop.hidden&&!combo.contains(e.target))closeTeamCombo(false);});
+  window.addEventListener('resize',()=>{if(teamIsOpen())positionTeamPopover();});
+}
+
+async function load(){
+  try{
+    const qs='range='+range+(drillSlug?'&root='+encodeURIComponent(drillSlug):'');
+    // One request: rows for the table plus the inclusive subtree totals,
+    // computed server-side in the same query. Older builds return a bare
+    // array — fall back to rows-only so a cached page still works.
+    const bundle=await fetch('/api/v1/org/usage?'+qs).then(async r=>{const j=await r.json();if(!r.ok)throw new Error(j.error||('HTTP '+r.status));return j;});
+    const data=Array.isArray(bundle)?bundle:bundle.rows;
+    const totals=Array.isArray(bundle)?null:(bundle.totals||null);
+    if(!Array.isArray(data))throw new Error(bundle.error||'usage failed');
+    rows=data;
+    if(!drillSlug){rows0=data;drillRoot=scopeRootSlug;buildFilter();}
+    renderRows();
+    renderPolicyNote(totals);
+    const active=rows.filter(r=>r.requests>0).length;
+    const people=totals&&Number.isFinite(totals.people)?totals.people:rows.length;
+    document.getElementById('kPeople').textContent=people;
+    let peopleSub=active+' with usage this window';
+    if(totals&&totals.blocked_people>0)peopleSub+=' · '+totals.blocked_people+' hidden by policy';
+    document.getElementById('kPeopleS').textContent=peopleSub;
+    const selected=drillSlug?rows0.find(r=>r.slug===drillSlug):null;
+    const personView=!!(selected&&!selected.is_manager);
+    document.getElementById('membersTitle').textContent=personView?'Person usage':(adminScope&&!drillSlug?'Organisation members':'Team members');
+    // The boot subtitle counts directory identities; once the roster is in,
+    // restate it as people and key-holders so "46 in your tree" and the
+    // Members tile (113) can't look like they disagree.
+    const keyed=rows.filter(r=>r.username).length;
+    document.getElementById('scopeSub').textContent=personView
+      ? 'Individual usage · '+keyed+' with a gateway key · this window'
+      : people+' people in your tree · '+keyed+' with a gateway key · their usage and yours, this window';
+    // Team budget: both sums cover the calendar month (quota_spent_usd is
+    // deliberately month-to-date on the server, whatever range is shown).
+    const lim=totals&&Number.isFinite(totals.quota_usd)?totals.quota_usd:rows.reduce((s,r)=>s+(r.quota_usd||0),0);
+    const mtd=totals&&Number.isFinite(totals.quota_spent_usd)?totals.quota_spent_usd:rows.reduce((s,r)=>s+(r.quota_spent_usd||0),0);
+    const over=totals&&Number.isFinite(totals.over_limit)?totals.over_limit:rows.filter(r=>r.over_limit).length;
+    setKBudget(mtd,lim,over);
+    loadCharts();
+  }catch(e){document.getElementById('rows').innerHTML='<tr><td colspan="6" class="err">'+esc(e.message)+'</td></tr>';}
+}
+
+// Dashboard country policy: blocked people are not listed, but their usage is
+// part of every total on this page. Say so, so the row count and the totals
+// cannot look like they disagree.
+function renderPolicyNote(totals){
+  const el=document.getElementById('policyNote');
+  if(!el)return;
+  const n=totals&&Number.isFinite(totals.blocked_people)?totals.blocked_people:0;
+  if(n>0){
+    el.textContent=n+(n===1?' person':' people')+' hidden by dashboard policy — their usage is included in totals.';
+    el.hidden=false;
+  }else{
+    el.hidden=true;el.textContent='';
+  }
+}
+
+// Budget gauge: one bar for spend-vs-limit. Green at ease, yellow only when
+// the team is actually close (>=80%), red over. No limit configured leaves
+// the tile empty rather than inventing a denominator.
+function setKBudget(spent,limit,overCount){
+  const v=document.getElementById('kBudget'),s=document.getElementById('kBudgetS');
+  const bar=document.getElementById('kBudgetBar'),wrap=bar.parentElement;
+  if(!limit){v.textContent='–';v.style.color='';s.textContent='';s.style.color='';wrap.style.display='none';return;}
+  wrap.style.display='';
+  const pct=100*spent/limit;
+  const teamOver=pct>100;
+  v.textContent=fmt$(spent);
+  v.style.color=teamOver?'#f2777a':'';
+  bar.style.width=Math.min(100,pct)+'%';
+  wrap.className='kbar'+(teamOver?' over':(pct>=80?' warn':''));
+  let sub='of '+fmt$(limit)+' this month';
+  if(teamOver)sub+=' · over budget';
+  else if(pct>=80)sub+=' · '+Math.round(pct)+'% used';
+  if(overCount>0)sub+=' · <b style="color:#f2777a">'+overCount+(overCount===1?' person over limit':' people over limit')+'</b>';
+  s.innerHTML=sub;
+  s.style.color=teamOver?'#f2777a':(pct>=80?'var(--warn)':'');
+}
+let drillRoot=''; // slug of the subtree currently shown (own slug for managers, '' for whole org)
+let scopeRootSlug='';
+let adminScope=false; // super-admins only: whole organisation, not a manager's branch
+
+// ── Team analytics: timeline + pies ───────────────────────────────────────
+// Same pie set as the Usage page, fed by /api/v1/org/charts: the server
+// scopes every number to the caller's subtree (or the drilled branch), so a
+// range button or team-filter change moves the timeline, the pies, the Saved
+// KPI and the table together. The old shared-dashboard timeline endpoint
+// scoped non-admins to themselves, which is why the chart used to sit empty
+// for a manager with a busy team.
+const PIE_COLORS=['#4da0f8','#eba830','#a88cf8','#38d4c2','#e8554e','#f778ba','#b8d94a','#6e7bf2','#b07a48','#ff8c69','#79c0ff','#d2a8ff','#56d4dd','#e3b341','#8090a8'];
+var savingsRef='claude-opus-4-8', modelMetric='tokens', userPieMetric='cost';
+var chartsCache=null, hvChart=null, modelChart=null, userChart=null;
+// Mirror of the Usage page's reference-model picklist and rate card, so the
+// "priced vs" choice means the same thing on both pages.
+var SAVINGS_REF_MODELS=['claude-opus-5','claude-fable-5','claude-opus-4-8','claude-sonnet-4-6','claude-haiku-4-5','gpt-5.5','gpt-5.4','gpt-4o'];
+var MODEL_PRICING_JS={
+  'claude-opus-5':{i:5,o:25},'claude-fable-5':{i:10,o:50},
+  'claude-opus-4-8':{i:5,o:25},'claude-opus-4-6':{i:5,o:25},
+  'claude-sonnet-4-6':{i:3,o:15},'claude-haiku-4-5':{i:1,o:5},
+  'gpt-5.5':{i:5,o:30},'gpt-5.4':{i:2.5,o:15},'gpt-4o':{i:2.5,o:10}
+};
+var HOSTED_PROVIDERS=['vllm','qwen'];
+// Same hosted test as the Usage page: trust the server's flag, the provider
+// list is the legacy fallback (the metered provider label drifts).
+function isHostedModel(m){return m.hosted===true||HOSTED_PROVIDERS.indexOf(m.provider||'')>=0;}
+function pieVal(d,m){return m==='cost'?d.cost_usd||0:m==='requests'?d.requests||0:d.total_tokens||0;}
+function pieFmt(v,m){return m==='cost'?fmt$(v):fmtTok(v);}
+
+async function loadCharts(){
+  try{
+    let url='/api/v1/org/charts?range='+range+'&ref='+encodeURIComponent(savingsRef);
+    if(drillSlug)url+='&root='+encodeURIComponent(drillSlug);
+    const d=await (await fetch(url)).json();
+    if(!d||!d.overview)throw new Error(d.error||'charts failed');
+    chartsCache=d;
+    renderTimeline(d.timeline||[]);
+    renderSavedKPI(d.overview);
+    renderPies();
+  }catch(e){/* the table reports real failures; charts just stay as-is */}
+}
+
+// Same endpoints, self-scoped by the server: a non-manager opening the page
+// sees their own pies, timeline and Saved card.
+async function loadSelfCharts(){
+  try{
+    const j=async u=>await (await fetch(u)).json();
+    const [ov,mo,us,tl]=await Promise.all([
+      j('/api/v1/dashboard/overview?range='+range+'&ref='+encodeURIComponent(savingsRef)),
+      j('/api/v1/dashboard/models?range='+range),
+      j('/api/v1/dashboard/users?range='+range+'&sort=cost_usd&order=desc&limit=10&ref='+encodeURIComponent(savingsRef)),
+      j('/api/v1/dashboard/timeline?range='+range+'&group_by=user')
+    ]);
+    chartsCache={overview:ov,models:mo,users:us,timeline:tl};
+    renderTimeline(tl||[]);
+    renderSavedKPI(ov);
+    renderPies();
+  }catch(e){}
+}
+
+function personName(username){
+  const r=rows.find(x=>x.username===username);
+  return (r&&(r.full_name||r.username))||username;
+}
+
+// Demo privacy keeps chart geometry and values visible; only identity text
+// in legends is blurred and tooltips are redacted.
+function demoPrivacyEnabled(){
+  return document.documentElement.classList.contains('demo-private');
+}
+function demoUserNumber(name){
+  var s=String(name||''),h=0;
+  for(var i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))>>>0;
+  return (h%97)+1;
+}
+function demoUserName(name,index){
+  return demoPrivacyEnabled() ? '████████ '+demoUserNumber(name) : name;
+}
+
+// Canvas text cannot use the CSS blur applied to DOM text. Detect whether
+// the browser actually renders CanvasRenderingContext2D.filter; if it does,
+// blur the name in place. Otherwise draw an opaque redaction bar so privacy
+// never silently fails on browsers without Canvas Filters.
+const canvasFilterSupported=(function(){
+  try{
+    const c=document.createElement('canvas');c.width=9;c.height=9;
+    const x=c.getContext('2d');
+    x.fillStyle='#fff';x.filter='blur(2px)';x.fillRect(4,4,1,1);
+    return x.getImageData(3,4,1,1).data[3]>0;
+  }catch(e){return false;}
+})();
+
+const privacyLegendBlur={
+  id:'privacyLegendBlur',
+  afterDraw(chart){
+    if(!demoPrivacyEnabled())return;
+    const legend=chart.legend;
+    if(!legend||!legend.legendItems||!legend.legendHitBoxes)return;
+    const labels=legend.options.labels||{};
+    const font=labels.font||{};
+    const fontSize=font.size||Chart.defaults.font.size;
+    const fontFamily=font.family||Chart.defaults.font.family;
+    const fontStyle=font.style||Chart.defaults.font.style;
+    const fontWeight=font.weight||Chart.defaults.font.weight;
+    const boxWidth=labels.boxWidth==null?40:labels.boxWidth;
+    const color=labels.color||Chart.defaults.color;
+    const ctx=chart.ctx;
+    const parts=chart.data&&chart.data.datasets&&chart.data.datasets[0]&&chart.data.datasets[0].privacyLegend;
+    const panel=chart.canvas.closest('.panel');
+    const maskBg=panel?getComputedStyle(panel).backgroundColor:'#141820';
+    ctx.save();
+    ctx.font=(fontStyle?fontStyle+' ':'')+(fontWeight?fontWeight+' ':'')+fontSize+'px '+fontFamily;
+    ctx.textAlign='left';
+    ctx.textBaseline='middle';
+    ctx.fillStyle=color;
+    legend.legendItems.forEach((item,i)=>{
+      const hit=legend.legendHitBoxes[i];
+      if(!hit||typeof item.text!=='string')return;
+      const part=parts&&parts[i];
+      let name,rest;
+      if(part){name=part.name;rest=part.rest||'';}
+      else{
+        const sep=item.text.indexOf(' — ');
+        name=sep>=0?item.text.slice(0,sep):item.text;
+        rest=sep>=0?item.text.slice(sep):'';
+      }
+      if(/^Other\b/.test(name))return;
+      const x=hit.left+boxWidth+fontSize/2;
+      const y=hit.top+hit.height/2;
+      const nameWidth=ctx.measureText(name).width;
+      if(canvasFilterSupported){
+        const restWidth=rest?ctx.measureText(rest).width:0;
+        ctx.clearRect(x-1,y-fontSize/2-3,nameWidth+restWidth+2,fontSize+6);
+        ctx.save();
+        ctx.filter='blur(3px)';
+        ctx.fillText(name,x,y);
+        ctx.restore();
+        if(rest)ctx.fillText(rest,x+nameWidth,y);
+      }else{
+        ctx.save();
+        ctx.fillStyle=maskBg;
+        ctx.fillRect(x-1,y-fontSize/2-2,nameWidth+2,fontSize+4);
+        ctx.restore();
+      }
+    });
+    ctx.restore();
+  }
+};
+
+function renderTimeline(buckets){
+  const byDay={}, totals=new Map();
+  const val=b=>tlMetric==='cost'?(b.total_cost_usd||0):(b.total_tokens||0);
+  for(const b of buckets){
+    const d=b.bucket.slice(0,10),v=val(b);
+    byDay[d]=byDay[d]||{};
+    byDay[d][b.series]=(byDay[d][b.series]||0)+v;
+    totals.set(b.series,(totals.get(b.series)||0)+v);
+  }
+  const days=Object.keys(byDay).sort();
+  const palette=['#4da0f8','#3dcc6e','#eba830','#a88cf8','#38d4c2','#e8554e','#8090a8'];
+  // Rank by the selected metric over the whole window. The old code took
+  // the first seven series in query order, which surfaced zero-use models
+  // and hid real traffic (for example DeepSeek) further down the alphabet.
+  const ranked=[...totals.entries()].filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]);
+  const top=ranked.slice(0,7).map(([n])=>n);
+  const tail=ranked.slice(7).map(([n])=>n);
+  const series=top.concat(tail.length?['__other__']:[]);
+  const dataFor=(day,n)=>n==='__other__'
+    ? tail.reduce((sum,x)=>sum+((byDay[day]&&byDay[day][x])||0),0)
+    : ((byDay[day]&&byDay[day][n])||0);
+  const ds=series.map((n,i)=>{
+    const other=n==='__other__';
+    const color=other?'#5b6b82':palette[i%palette.length];
+    return {label:other?'Other':n,data:days.map(d=>dataFor(d,n)),
+      borderColor:color,backgroundColor:color+'22',tension:.3,fill:false,pointRadius:2,borderWidth:2};
+  });
+  if(tlChart)tlChart.destroy();
+  tlChart=new Chart(document.getElementById('tl'),{type:'line',
+    data:{labels:days,datasets:ds},
+    options:{plugins:{legend:{labels:{color:'#e2e6ec',boxWidth:10}}},
+      scales:{x:{ticks:{color:'#8090a8'},grid:{color:'#1a2030'}},
+              y:{ticks:{color:'#8090a8',callback:v=>tlMetric==='cost'?fmt$(v):fmtTok(v)},grid:{color:'#1a2030'}}}}});
+}
+
+// Tokens vs dollars on the same cached buckets — no refetch, the server
+// sends both columns with every timeline point.
+document.getElementById('tlToggle').addEventListener('click',e=>{
+  const b=e.target.closest('button');if(!b)return;
+  if(demoPrivacyEnabled()&&b.dataset.tm==='cost')return;
+  tlMetric=b.dataset.tm;
+  document.querySelectorAll('#tlToggle button').forEach(x=>x.classList.toggle('on',x===b));
+  if(chartsCache)renderTimeline(chartsCache.timeline||[]);
+});
+
+function populateRefSel(){
+  const sel=document.getElementById('refSel');
+  if(!sel||sel.options.length)return;
+  const ordered=SAVINGS_REF_MODELS.slice().sort((a,b)=>{
+    const pa=MODEL_PRICING_JS[a]||{i:0,o:0},pb=MODEL_PRICING_JS[b]||{i:0,o:0};
+    return (pb.i+pb.o)-(pa.i+pa.o)||a.localeCompare(b);
+  });
+  sel.innerHTML=ordered.map(m=>'<option value="'+m+'"'+(m===savingsRef?' selected':'')+'>'+m+'</option>').join('');
+}
+
+function renderSavedKPI(ov){
+  populateRefSel();
+  document.getElementById('kSaved').textContent=typeof ov.saved_usd==='number'?fmt$(ov.saved_usd):'–';
+  document.getElementById('kSavedNote').textContent=ov.savings_ratio_applied?' · '+Math.round((ov.savings_ratio||0)*100)+'% input est. cached':'';
+}
+
+// Shared doughnut options: legend + "name: value (x%)" tooltips, built once
+// so the three pies can't drift apart (and can't hide a brace typo).
+function donutOpts(nameAt,vals,metric,titleAt){
+  const total=vals.reduce((a,b)=>a+b,0);
+  const callbacks={label:c=>{
+    const raw=c.raw;
+    return nameAt(c.dataIndex)+': '+pieFmt(raw,metric)+(total>0?' ('+((raw/total)*100).toFixed(1)+'%)':'');
+  }};
+  if(titleAt)callbacks.title=items=>items.length?titleAt(items[0]):'';
+  return {responsive:true,plugins:{
+    legend:{position:'right',labels:{color:'#8090a8',font:{size:11},padding:8}},
+    tooltip:{callbacks}
+  }};
+}
+
+function renderPies(){
+  if(!chartsCache)return;
+  const models=chartsCache.models||[];
+  // Hosted vs Vendor token split — same client-side arithmetic as the
+  // Usage page: a token count needs no pricing to agree.
+  let hosted=0,total=0;
+  models.forEach(m=>{const t=m.total_tokens||0;total+=t;if(isHostedModel(m)&&t>0)hosted+=t;});
+  const vendor=Math.max(total-hosted,0);
+  if(hvChart)hvChart.destroy();
+  hvChart=new Chart(document.getElementById('hvChart'),{
+    type:'doughnut',
+    data:{
+      labels:['Hosted — '+fmtTok(hosted),'Vendor — '+fmtTok(vendor)],
+      datasets:[{data:[hosted,vendor],backgroundColor:['#3fb950','#d29922'],borderWidth:0}]
+    },
+    options:donutOpts(i=>i===0?'Hosted':'Vendor',[hosted,vendor],'tokens')
+  });
+  // By Model — top 8 by the selected metric, the long tail folded into one
+  // grey "Other" slice: a 20-line legend makes the panel taller than the
+  // pie is worth. Toggling the metric re-ranks, so what surfaces as "top"
+  // always matches what's being measured.
+  const ranked=(models.map(d=>({name:d.model,val:pieVal(d,modelMetric),hosted:isHostedModel(d)})))
+    .sort((a,b)=>b.val-a.val);
+  const TOPN=8;
+  const topM=ranked.slice(0,TOPN), tail=ranked.slice(TOPN);
+  const pieM=topM.concat(tail.length?[{name:'Other — '+tail.length+' models',val:tail.reduce((s,d)=>s+d.val,0),other:true}]:[]);
+  const mv=pieM.map(d=>d.val);
+  const mColors=pieM.map((d,i)=>d.other?'#5b6b82':PIE_COLORS[i%PIE_COLORS.length]);
+  const mLabel=d=>{const n=d.name.length>26?d.name.slice(0,25)+'…':d.name;return n+' — '+pieFmt(d.val,modelMetric);};
+  if(modelChart)modelChart.destroy();
+  modelChart=new Chart(document.getElementById('modelChart'),{
+    type:'doughnut',
+    data:{
+      labels:pieM.map(mLabel),
+      datasets:[{data:mv,backgroundColor:mColors,borderWidth:0}]
+    },
+    options:donutOpts(i=>pieM[i].name,mv,modelMetric)
+  });
+  // By User — same top-8-plus-Other shape as By Model (the user list only
+  // grows). Ranks by the selected metric over the team's full list, folds
+  // the tail, and truncates long display names in the legend.
+  const uName=d=>d.display_name||personName(d.username);
+  const rankedU=(chartsCache.users||[]).map(d=>({name:uName(d),val:pieVal(d,userPieMetric)}))
+    .sort((a,b)=>b.val-a.val);
+  const topU=rankedU.slice(0,TOPN), tailU=rankedU.slice(TOPN);
+  const pieU=topU.concat(tailU.length?[{name:'Other — '+tailU.length+' users',val:tailU.reduce((s,d)=>s+d.val,0),other:true}]:[]);
+  const uv=pieU.map(d=>d.val);
+  const uColors=pieU.map((d,i)=>d.other?'#5b6b82':PIE_COLORS[i%PIE_COLORS.length]);
+  const uLabelParts=pieU.map(d=>{
+    const n=d.name.length>26?d.name.slice(0,25)+'…':d.name;
+    return {name:n,rest:' — '+pieFmt(d.val,userPieMetric)};
+  });
+  const uLabels=uLabelParts.map(p=>p.name+p.rest);
+  if(userChart)userChart.destroy();
+  userChart=new Chart(document.getElementById('userChart'),{
+    type:'doughnut',
+    data:{
+      labels:uLabels,
+      datasets:[{data:uv,backgroundColor:uColors,borderWidth:0,privacyLegend:uLabelParts}]
+    },
+    plugins:[privacyLegendBlur],
+    options:donutOpts(
+      i=>pieU[i].other?'Other':demoUserName(pieU[i].name,i),
+      uv,userPieMetric,
+      c=>pieU[c.dataIndex]&&pieU[c.dataIndex].other?'Other':demoUserName(pieU[c.dataIndex]?pieU[c.dataIndex].name:'',c.dataIndex)
+    )
+  });
+}
+
+function setMetricToggle(id,attr,value){
+  document.querySelectorAll('#'+id+' button').forEach(function(b){b.classList.toggle('on',b.dataset[attr]===value);});
+}
+function syncDemoMetrics(){
+  if(!demoPrivacyEnabled())return false;
+  var changed=false;
+  if(modelMetric==='cost'){modelMetric='tokens';setMetricToggle('mmToggle','mm','tokens');changed=true;}
+  if(userPieMetric==='cost'){userPieMetric='tokens';setMetricToggle('umToggle','um','tokens');changed=true;}
+  if(tlMetric==='cost'){tlMetric='tokens';setMetricToggle('tlToggle','tm','tokens');changed=true;}
+  return changed;
+}
+window.refreshDemoPrivacy=function(){
+  syncDemoMetrics();
+  if(rows0.length)buildFilter();
+  if(!chartsCache)return;
+  renderPies();
+  renderTimeline(chartsCache.timeline||[]);
+};
+
+document.getElementById('mmToggle').addEventListener('click',e=>{
+  const b=e.target.closest('button');if(!b)return;
+  if(demoPrivacyEnabled()&&b.dataset.mm==='cost')return;
+  modelMetric=b.dataset.mm;
+  document.querySelectorAll('#mmToggle button').forEach(x=>x.classList.toggle('on',x===b));
+  renderPies();
+});
+document.getElementById('umToggle').addEventListener('click',e=>{
+  const b=e.target.closest('button');if(!b)return;
+  if(demoPrivacyEnabled()&&b.dataset.um==='cost')return;
+  userPieMetric=b.dataset.um;
+  document.querySelectorAll('#umToggle button').forEach(x=>x.classList.toggle('on',x===b));
+  renderPies();
+});
+
+async function boot(){
+  try{ me=await (await fetch('/api/v1/whoami')).json(); }catch(e){}
+  // Header identity + role-gated tabs (same convention as every page).
+  const ab=document.getElementById('abUser');
+  ab.innerHTML='<span class="demo-pii">'+esc(me.display_name||me.user||'')+'</span>';
+  if(me.isSuperAdmin||me.isAdmin){
+    const role=document.createElement('span');
+    role.className='role';
+    role.textContent=me.isSuperAdmin?' (super admin)':' (admin)';
+    ab.appendChild(role);
+  }
+  if(me.isSuperAdmin){
+    ['tab-routing','tab-admin'].forEach(id=>document.getElementById(id).style.display='');
+    const mvb=document.getElementById('my-view-btn');
+    mvb.href='/admin/impersonate?as='+encodeURIComponent(me.user);
+    mvb.style.display='';
+  }
+  if(me.isAdmin||me.isSuperAdmin){
+    document.getElementById('tab-org').style.display='';
+  }
+  if(typeof initDemoPrivacy==='function')initDemoPrivacy(!!me.isSuperAdmin);
+  if(me.impersonating){
+    document.getElementById('banner').style.display='flex';
+    document.getElementById('bannerText').textContent=
+      'Viewing as '+(me.display_name||me.user)+'. Real session: '+(me.real_user_display||me.real_user);
+    // No ?as= means "clear" server-side.
+    document.getElementById('bannerClear').href='/admin/impersonate';
+  }
+  const sc=await (await fetch('/api/v1/org/scope')).json();
+  if(sc.scope==='self'){
+    document.getElementById('scopeTitle').textContent='My usage';
+    document.getElementById('scopeSub').textContent='You are not listed as a manager in the directory — showing your own usage.';
+    document.getElementById('selfNote').innerHTML=
+      '<div class="self-note">You are seeing only your own numbers. If you manage people and expected the team view, ask an admin to add your reporting lines to the <b>People</b> directory — the manager view turns on automatically the moment people report to you.</div>';
+    document.getElementById('kpiMembers').style.display='none';
+    // No team, but a budget of one: paint the tile from the caller's own quota.
+    document.getElementById('kBudgetL').textContent='My budget';
+    if(me.quota)setKBudget(me.quota.spent_usd,me.quota.limit_usd,me.quota.spent_usd>=me.quota.limit_usd);
+  } else if(sc.scope==='manager'){
+    scopeRootSlug=sc.personSlug||'';
+
+    drillRoot=scopeRootSlug;
+    document.getElementById('scopeSub').textContent=sc.scopeSize+' people in your tree · their spend and yours, this window';
+  } else if(sc.scope==='admin'){
+    // Only super-admins ever reach this branch — the server hands the
+    // "admin" scope to nobody else, so a manager who is also an admin
+    // lands in the manager branch above and sees their own tree.
+    adminScope=true;
+    document.getElementById('scopeTitle').textContent='Org view';
+    document.getElementById('scopeSub').textContent='Super admin — everyone in the organisation, one table. Filter to any team or person above.';
+    document.getElementById('kBudgetL').textContent='Org budget';
+  }
+  loadInbox();
+  if(sc.scope!=='self')load();
+  else loadSelf();
+}
+
+// ── Approval inbox (disabled: quota request/approval removed in phase one) ──
+let inboxById={};
+async function loadInbox(){ return; /* quota requests removed */
+  try{
+    const list=await (await fetch('/api/v1/org/quota-requests?state=pending')).json();
+    if(!Array.isArray(list))return;
+    inboxById={};list.forEach(q=>{inboxById[q.id]=q;});
+    const panel=document.getElementById('approvals');
+    const banner=document.getElementById('apprBanner');
+    const cnt=document.getElementById('apprCount');
+    if(cnt)cnt.textContent=list.length?('('+list.length+')'):'';
+    if(!list.length){panel.style.display='none';if(banner)banner.style.display='none';return;}
+    panel.style.display='';
+    if(banner){
+      document.getElementById('apprBannerText').innerHTML=
+        '<b>'+list.length+(list.length===1?' request':' requests')+' awaiting your approval</b> — from '+esc(new Set(list.map(q=>q.person_name)).size+(new Set(list.map(q=>q.person_name)).size===1?' person':' people'))+'.';
+      banner.style.display='flex';
+    }
+    // Each row shows the FULL questionnaire the person filed — the inbox is
+    // the decision surface, so nothing the requester answered stays hidden
+    // behind a click. Rows filed before the questionnaire only have `reason`.
+    const qa=(label,val)=>val?`<div class="appr-qa"><span class="appr-ql">${label}</span>${esc(val)}</div>`:'';
+    document.getElementById('apprBody').innerHTML=list.map(q=>{
+      const age=esc(new Date(q.created_at).toLocaleDateString('en-US'));
+      const stale=!q.is_current_month;
+      const act=stale
+        ?'<span class="dim">from a past month — they can cancel it and re-file</span>'
+        :`<button class="appr ok" onclick="approveReq(${q.id})">Approve</button>
+          <button class="appr no" onclick="rejectReq(${q.id})">Reject</button>`;
+      const feas=q.feasible_within_base==='yes'?'<span class="appr-feas yes">Yes</span>'
+        :q.feasible_within_base==='no'?'<span class="appr-feas no">No</span>':'';
+      return `<div class="appr-row">
+        <div style="flex:1;min-width:260px">
+          <b>${esc(q.person_name)}</b> <span class="dim">${esc(q.username||'')} · asked ${fmt$(q.asked_usd)} for ${esc(q.month)} · ${age}</span>
+          <div class="appr-qs">
+            ${qa('Tasks',q.reason)}
+            ${qa('Reduction steps',q.reduction_steps)}
+            ${qa('Estimate based on',q.estimate_basis)}
+            ${qa('Timeline',q.timeline)}
+            ${feas?`<div class="appr-qa"><span class="appr-ql">Fits standard budget?</span>${feas}</div>`:''}
+            ${qa('Why standard budget is not enough',q.why_not_enough)}
+            ${q.reason||q.reduction_steps?'':'<div class="dim" style="font-size:12.5px">(no reason given)</div>'}
+          </div>
+        </div>
+        <div class="appr-act">${act}</div>
+      </div>`;
+    }).join('');
+  }catch(e){/* inbox is an extra; a failure here must not break the page */}
+}
+async function decideReq(id,path,body,okMsg){
+  // Handlers answer with plain-text reasons on 4xx, text on success.
+  let r;
+  try{
+    r=await (await fetch('/api/v1/org/quota-requests/'+id+'/'+path,{
+      method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}));
+  }catch(e){alert('Could not reach the server: '+e.message);return;}
+  if(!r.ok){
+    alert('Could not record the decision: '+((await r.text()).trim()||('HTTP '+r.status)));
+    loadInbox(); // someone else may have decided it already
+    return;
+  }
+  alert(okMsg);
+  loadInbox();load();
+}
+function approveReq(id){
+  const q=inboxById[id];if(!q)return;
+  const v=prompt('Approve extra budget for '+q.person_name+' (they asked '+fmt$(q.asked_usd)+').\nThe grant covers the rest of this calendar month. You can approve as asked or type a different amount:',q.asked_usd);
+  if(v===null)return;
+  const amt=parseFloat(v);
+  if(!(amt>0)){alert('Enter a positive amount');return;}
+  decideReq(id,'approve',{approved_usd:amt},'Approved '+fmt$(amt)+' for '+q.person_name+'.');
+}
+function rejectReq(id){
+  const q=inboxById[id];if(!q)return;
+  const c=prompt('Reject '+q.person_name+'’s '+fmt$(q.asked_usd)+' request?\nYour reason is shown to them on their dashboard:');
+  if(c===null)return;
+  if(!c.trim()){alert('A reason is required — the requester sees it');return;}
+  decideReq(id,'reject',{comment:c.trim()},'Rejected.');
+}
+
+async function loadSelf(){
+  const users=await (await fetch('/api/v1/dashboard/users?range='+range)).json();
+  rows=users.map(u=>({full_name:u.display_name||u.username,cost_usd:u.cost_usd,total_tokens:u.total_tokens,requests:u.requests,last_used:null,is_manager:false,no_identity:!u.requests}));
+  renderRows();
+  loadSelfCharts();
+}
+
+// ── Person detail (per-model spend + hosted savings) ──────────────────────
+document.getElementById('rows').addEventListener('click',e=>{
+  const tr=e.target.closest('tr.clickable'); if(!tr||!tr.dataset.slug)return;
+  const r=rows.find(x=>x.slug===tr.dataset.slug);
+  if(r&&r.no_identity)return; // nobody to drill into yet
+  openDetail(tr.dataset.slug);
+});
+function closeDetail(){document.getElementById('det-ov').classList.remove('show');}
+async function openDetail(slug){
+  document.getElementById('det-ov').classList.add('show');
+  document.getElementById('detName').textContent='…';
+  document.getElementById('detWho').textContent='';
+  document.getElementById('detBody').innerHTML='<div class="pm-sub" style="padding:14px 0">Loading…</div>';
+  document.getElementById('detNote').textContent='';
+  ['dSpend','dTokens','dReqs','dSaved','dModels'].forEach(id=>document.getElementById(id).textContent='–');
+  try{
+    const d=await (await fetch('/api/v1/org/person?slug='+encodeURIComponent(slug)+'&range='+range)).json();
+    if(d.error)throw new Error(d.error);
+    document.getElementById('detName').textContent=d.fullName||d.slug;
+    document.getElementById('detWho').textContent=(d.usernames||[]).join(', ')||'no gateway identity';
+    const ms=d.models||[];
+    const spend=ms.reduce((s,m)=>s+(m.cost_usd||0),0);
+    const tok=ms.reduce((s,m)=>s+(m.total_tokens||0),0);
+    const req=ms.reduce((s,m)=>s+(m.requests||0),0);
+    const saved=ms.reduce((s,m)=>s+(m.saved_usd||0),0);
+    document.getElementById('dSpend').textContent=fmt$(spend);
+    document.getElementById('dTokens').textContent=fmtTok(tok);
+    document.getElementById('dReqs').textContent=req.toLocaleString();
+    document.getElementById('dSaved').textContent=fmt$(saved);
+    document.getElementById('dModels').textContent=ms.length;
+    if(!ms.length){
+      document.getElementById('detBody').innerHTML='<div class="pm-sub" style="padding:14px 0">No usage in this window.</div>';
+    }else{
+      document.getElementById('detBody').innerHTML='<table><thead><tr><th>Model</th><th class="num">Requests</th><th class="num">Prompt</th><th class="num">Completion</th><th class="num">Cached</th><th class="num">Total</th><th class="num demo-cost">Cost</th><th class="num">Saved · hosted</th></tr></thead><tbody>'+
+        ms.map(m=>'<tr><td>'+esc(m.model)+(m.hosted?' <span class="hosted">hosted</span>':'')+'<div class="dim" style="font-size:11px">'+esc(m.provider||'')+(m.last_used?' · last '+m.last_used.slice(0,10):'')+'</div></td>'
+          +'<td class="num">'+(m.requests||0).toLocaleString()+'</td>'
+          +'<td class="num">'+fmtTok(m.prompt_tokens)+'</td>'
+          +'<td class="num">'+fmtTok(m.completion_tokens)+'</td>'
+          +'<td class="num">'+fmtTok(m.cached_tokens)+'</td>'
+          +'<td class="num">'+fmtTok(m.total_tokens)+'</td>'
+          +'<td class="num demo-cost">'+fmt$(m.cost_usd)+'</td>'
+          +'<td class="num'+(m.saved_usd>0?' saved-pos':'')+'">'+(m.saved_usd>0?fmt$(m.saved_usd):'–')+'</td></tr>').join('')+'</tbody></table>';
+      const hostedSaved=ms.filter(m=>m.saved_usd>0).length;
+      if(hostedSaved){
+        document.getElementById('detNote').textContent='Saved · hosted estimates what the same hosted-traffic tokens would have cost at the reference vendor model’s rates, minus what was billed. Models with no savings are paid models (savings only shown for hosted traffic).';
+      }
+    }
+  }catch(e){
+    document.getElementById('detBody').innerHTML='<div class="pm-sub" style="padding:14px 0;color:#f2777a">Could not load detail ('+esc(e.message)+').</div>';
+  }
+}
+
+// ── Model pricing modal (shared rate card across all pages) ─────────
+function pmEsc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+function pmPrice(v){v=+v||0;return v>0?'$'+v.toLocaleString(undefined,{maximumFractionDigits:3}):'<span class="pm-zero">–</span>';}
+function pmDiscount(m){if(m.discount_percent!=null)return +m.discount_percent||0;var p=[['input_cost_per_mtok','list_input_cost_per_mtok'],['output_cost_per_mtok','list_output_cost_per_mtok'],['cache_read_cost_per_mtok','list_cache_read_cost_per_mtok'],['cache_write_cost_per_mtok','list_cache_write_cost_per_mtok']],d=[];p.forEach(function(x){var e=+m[x[0]]||0,l=+m[x[1]]||0;if(l>0)d.push(100*(1-e/l));});if(!d.length)return null;return Math.max(0,Math.min.apply(null,d));}
+function pmRate(e,l,free,d){var baseline=+l||0;if(!(baseline>0)&&(+d||0)>0&&(+(e)||0)>0)baseline=(+e)/(1-(+d/100));var out=(+e||0)>0?pmPrice(e):(free?'$0':'<span class="pm-zero">–</span>');if(baseline>0&&Math.abs((+e||0)-baseline)>.000001)out+='<div class="pm-list">reference '+pmPrice(baseline)+'</div>';return out;}
+function openPricing(){document.getElementById('pricing-ov').classList.add('show');loadPricing();}
+function closePricing(){document.getElementById('pricing-ov').classList.remove('show');}
+function loadPricing(){
+  var all=document.getElementById('pm-all').checked;
+  var body=document.getElementById('pm-body');
+  body.innerHTML='<div class="pm-sub" style="padding:14px 0">Loading…</div>';
+  fetch('/api/v1/pricing'+(all?'?used=0':'')).then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();}).then(function(j){
+    var ms=j.models||[];
+    if(!ms.length){body.innerHTML='<div class="pm-sub" style="padding:14px 0">No rates seeded yet.</div>';return;}
+     body.innerHTML='<table><thead><tr><th>Model</th><th>Discount</th><th>Input</th><th>Output</th><th>Cache read</th><th>Cache write</th></tr></thead><tbody>'+
+       ms.sort(function(a,b){var free=function(m){return ((+m.input_cost_per_mtok||0)+(+m.output_cost_per_mtok||0)<=0);},da=pmDiscount(a),db=pmDiscount(b),ra=free(a)?0:(da!==null&&da>0.05?1:2),rb=free(b)?0:(db!==null&&db>0.05?1:2);return ra-rb||(ra===1?(db-da):0)||String(a.model).localeCompare(String(b.model));}).map(function(m){
+         var free=(+m.input_cost_per_mtok||0)+(+m.output_cost_per_mtok||0)<=0;
+         var d=pmDiscount(m), badge=free?'<span class="pm-free">FREE</span>':(d!==null&&d>0.05?'<span class="pm-discount">'+d.toFixed(d%1?1:0)+'% off</span>':'<span class="pm-none">no discount</span>');
+         return '<tr><td>'+pmEsc(m.model)+(m.hosted?'<span class="pm-host">hosted</span>':'')+'<div class="pm-list">'+pmEsc(m.provider)+'</div></td><td>'+badge+'</td>'
+           +'<td>'+pmRate(m.input_cost_per_mtok,m.list_input_cost_per_mtok,free,m.discount_percent)+'</td><td>'+pmRate(m.output_cost_per_mtok,m.list_output_cost_per_mtok,free,m.discount_percent)+'</td>'
+           +'<td>'+pmRate(m.cache_read_cost_per_mtok,m.list_cache_read_cost_per_mtok,free,m.discount_percent)+'</td><td>'+pmRate(m.cache_write_cost_per_mtok,m.list_cache_write_cost_per_mtok,free,m.discount_percent)+'</td></tr>';
+      }).join('')+'</tbody></table>';
+  }).catch(function(e){body.innerHTML='<div class="pm-sub" style="padding:14px 0;color:#f2777a">Could not load pricing ('+pmEsc(e.message)+').</div>';});
+}
+document.addEventListener('keydown',function(e){if(e.key==='Escape'){closePricing();closeDetail();}});
+
+setupTeamCombobox();
+boot();
+</script>
+<script>
+(function(){
+  var KEY='pricetag-demo-privacy';
+  window.initDemoPrivacy=function(isSuperAdmin){
+    var trigger=document.getElementById('abUser');
+    if(!isSuperAdmin||!trigger)return;
+    function apply(on){document.documentElement.classList.toggle('demo-private',on);trigger.classList.toggle('demo-privacy-active',on);try{localStorage.setItem(KEY,on?'1':'0')}catch(e){}if(typeof window.refreshDemoPrivacy==='function')window.refreshDemoPrivacy(on);}
+    if(trigger.dataset.demoPrivacyBound)return;
+    trigger.dataset.demoPrivacyBound='1';
+    try{apply(localStorage.getItem(KEY)==='1')}catch(e){apply(false)}
+    trigger.addEventListener('dblclick',function(){apply(!document.documentElement.classList.contains('demo-private'))});
+    window.addEventListener('storage',function(e){if(e.key===KEY)apply(e.newValue==='1')});
+  };
+})();
+</script>
+</body>
+</html>

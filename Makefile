@@ -134,3 +134,25 @@ push-image: ##	push container image (use REPO= and TAG= to specify image)
 
 .PHONY: build-push-image
 build-push-image: build-image push-image ##	build and push container image
+
+##@ Price Tag metering image (PoC)
+
+# Vendored copy of the pricetag-metering service (see price-tag/), built and
+# pushed separately from the controller image. PoC base for the MaaS budget
+# enforcement feasibility work.
+PRICE_TAG_REPO ?= quay.io/maas/price-tag
+PRICE_TAG_TAG ?= pricetag-poc
+PRICE_TAG_IMAGE ?= $(PRICE_TAG_REPO):$(PRICE_TAG_TAG)
+
+.PHONY: build-price-tag-image
+build-price-tag-image: ##	build the price-tag metering image (use PRICE_TAG_TAG= to override tag)
+	@echo "Building price-tag image $(PRICE_TAG_IMAGE)..."
+	$(CONTAINER_ENGINE) build -f price-tag/Dockerfile -t "$(PRICE_TAG_IMAGE)" price-tag
+	@echo "Price-tag image $(PRICE_TAG_IMAGE) built successfully"
+
+.PHONY: push-price-tag-image
+push-price-tag-image: ##	push the price-tag metering image
+	@$(CONTAINER_ENGINE) push "$(PRICE_TAG_IMAGE)"
+
+.PHONY: build-push-price-tag-image
+build-push-price-tag-image: build-price-tag-image push-price-tag-image ##	build and push the price-tag metering image

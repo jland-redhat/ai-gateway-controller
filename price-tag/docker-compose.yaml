@@ -1,0 +1,39 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: metering
+      POSTGRES_PASSWORD: metering-dev
+      POSTGRES_DB: metering
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U metering -d metering"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  maas-api:
+    image: python:3.13-alpine
+    command: ["python", "/app/maas_stub.py"]
+    volumes:
+      - ./tools/local/maas_stub.py:/app/maas_stub.py:ro
+    ports:
+      - "8081:8081"
+
+  metering-service:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL: postgres://metering:metering-dev@postgres:5432/metering?sslmode=disable
+      MAAS_VALIDATE_URL: http://maas-api:8081/internal/v1/api-keys/validate
+      SESSION_SECRET: local-development-only-session-secret
+      M2M_AUTH_REQUIRED: "false"
+      MODEL_POLICY_API_SECRET: local-development-model-policy-secret
+      QUOTA_ENFORCEMENT_ENABLED: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      maas-api:
+        condition: service_started

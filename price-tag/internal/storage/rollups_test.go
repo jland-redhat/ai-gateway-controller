@@ -1,0 +1,108 @@
+package storage
+
+import (
+	"strings"
+	"testing"
+	"time"
+)
+
+// These guard the SQL STRUCTURE of the Phase 3 machinery. The numeric
+// equivalence itself is guaranteed by construction (one shared
+// costUSDExpr string) and exercised against real Postgres by the parity
+// gate; what CI can check cheaply is that nobody quietly edits one path
+// and not the others.
+
+func TestMigrationsIncludeRollupSchema(t *testing.T) {
+	all := strings.Join(migrations, "\n")
+	for _, want := range []string{
+		"ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS cost_usd",
+		"CREATE TABLE IF NOT EXISTS usage_hourly",
+		"CREATE UNIQUE INDEX IF NOT EXISTS usage_hourly_key ON usage_hourly (hour, username, group_name, model, provider)",
+		"CREATE UNIQUE INDEX IF NOT EXISTS usage_tool_hourly_key ON usage_tool_hourly (hour, username, group_name, model, provider, tool)",
+		"CREATE TABLE IF NOT EXISTS rollup_meta",
+	} {
+		if !strings.Contains(all, want) {
+			t.Errorf("migrations missing: %s", want)
+		}
+	}
+}
+
+func TestInsertEventSQLUsesCostExprVerbatim(t *testing.T) {
+	for _, want := range []string{costUSDExpr, "LEFT JOIN model_pricing p ON p.model = e.model", "ON CONFLICT DO NOTHING", "RETURNING cost_usd"} {
+		if !strings.Contains(insertEventSQL, want) {
+			t.Error("insertEventSQL lost a required clause — cost must be computed from the SHARED costUSDExpr:", want)
+		}
+	}
+}
+
+func TestCostBackfillSQLUsesCostExprVerbatim(t *testing.T) {
+	if !strings.Contains(costBackfillSQL, costUSDExpr) {
+		t.Error("cost backfill must reuse costUSDExpr verbatim — no second cost formula")
+	}
+	if !strings.Contains(costBackfillSQL, "e.cost_usd IS NULL") {
+		t.Error("cost backfill must only touch NULL-cost rows (resumability)")
+	}
+}
+
+func TestUpsertRollupAddsEverySummedColumn(t *testing.T) {
+	for _, col := range []string{
+		"requests", "prompt_tokens", "completion_tokens", "total_tokens",
+		"cached_input_tokens", "cache_creation_tokens", "cost_usd",
+	} {
+		want := "usage_hourly." + col + " + EXCLUDED." + col
+		if !strings.Contains(upsertRollupSQL, want) {
+			t.Errorf("live upsert missing increment for %s — a dropped column silently undercounts forever", col)
+		}
+	}
+}
+
+func TestRebuildOverwritesFromRawDoesNotAdd(t *testing.T) {
+	if strings.Contains(rebuildHourSQL, "usage_hourly.requests +") {
+		t.Error("rebuild must REPLACE with raw-recomputed values (EXCLUDED), never add — adds double-count on replay")
+	}
+	if !strings.Contains(rebuildHourSQL, "requests = EXCLUDED.requests") {
+		t.Error("rebuild must overwrite conflict rows from raw")
+	}
+	if !strings.Contains(rebuildHourSQL, "COUNT(*)") {
+		t.Error("rebuild counts requests from raw rows (denials included, plan rev2 parity rule)")
+	}
+}
+
+func TestParityStateFromMeta(t *testing.T) {
+	now := time.Date(2026, 11, 2, 18, 0, 0, 0, time.UTC)
+	fresh := now.Add(-2 * time.Minute).Format(time.RFC3339)
+	stale := now.Add(-45 * time.Minute).Format(time.RFC3339)
+	cases := []struct {
+		name    string
+		healthy string
+		checked string
+		maxAge  time.Duration
+		want    bool
+		wantOK  bool
+	}{
+		{"fresh green", "true", fresh, 15 * time.Minute, true, true},
+		{"fresh red", "false", fresh, 15 * time.Minute, false, true},
+		{"stale green falls back", "true", stale, 15 * time.Minute, false, true},
+		{"missing checked_at", "true", "", 15 * time.Minute, false, false},
+		{"unparsable checked_at", "true", "not-a-time", 15 * time.Minute, false, false},
+		{"future-dated verdict is red", "true", now.Add(10 * time.Minute).Format(time.RFC3339), 15 * time.Minute, false, true},
+		{"small future skew stays fresh", "true", now.Add(time.Minute).Format(time.RFC3339), 15 * time.Minute, true, true},
+		{"zero max age trusts the verdict", "true", stale, 0, true, true},
+	}
+	for _, tc := range cases {
+		healthy, checkedAt, ok := parityStateFromMeta(tc.healthy, tc.checked, now, tc.maxAge)
+		if ok != tc.wantOK {
+			t.Errorf("%s: ok = %v, want %v", tc.name, ok, tc.wantOK)
+			continue
+		}
+		if !ok {
+			continue
+		}
+		if healthy != tc.want {
+			t.Errorf("%s: healthy = %v, want %v", tc.name, healthy, tc.want)
+		}
+		if checkedAt.IsZero() {
+			t.Errorf("%s: checkedAt is zero for a parsed verdict", tc.name)
+		}
+	}
+}

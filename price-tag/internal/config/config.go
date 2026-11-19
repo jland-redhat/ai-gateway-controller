@@ -1,0 +1,643 @@
+// Package config resolves runtime settings from the environment.
+//
+// Only DATABASE_URL is required. Every other setting has a working
+// default, and every optional integration stays switched off until it is
+// explicitly configured, so the service runs unmodified against any
+// gateway that speaks the CloudEvents contract.
+package config
+
+import (
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
+	"unicode"
+)
+
+// DefaultMonthlyTokenQuota is the per-user monthly token allowance applied
+// when MONTHLY_TOKEN_QUOTA is unset.
+const DefaultMonthlyTokenQuota = 100_000_000
+
+// MeteringMode selects which workloads a process runs.
+//
+//   - all: serves the HTTP API and owns rollup maintenance/backfill (default;
+//     the historical single-deployment behavior).
+//   - api: serves the HTTP API only. Rollup maintenance and the one-time
+//     backfill are owned by a separate rollup worker; this process keeps its
+//     dashboard parity state in sync from rollup_meta.
+//   - rollup: runs maintenance and backfill only; exposes health and metrics,
+//     not the API routes.
+type MeteringMode string
+
+const (
+	ModeAll    MeteringMode = "all"
+	ModeAPI    MeteringMode = "api"
+	ModeRollup MeteringMode = "rollup"
+)
+
+// ParseMeteringMode validates METERING_MODE. Empty means all.
+func ParseMeteringMode(raw string) (MeteringMode, error) {
+	switch MeteringMode(strings.ToLower(strings.TrimSpace(raw))) {
+	case "", ModeAll:
+		return ModeAll, nil
+	case ModeAPI:
+		return ModeAPI, nil
+	case ModeRollup:
+		return ModeRollup, nil
+	default:
+		return "", fmt.Errorf("METERING_MODE %q is invalid (want all, api, or rollup)", raw)
+	}
+}
+
+// RunsMaintenance reports whether this mode owns rollup maintenance and the
+// one-time backfill. The zero value behaves like all for backward compatibility.
+func (m MeteringMode) RunsMaintenance() bool {
+	return m == "" || m == ModeAll || m == ModeRollup
+}
+
+// ServesAPIRoutes reports whether this mode serves the HTTP API. The zero value
+// behaves like all for backward compatibility.
+func (m MeteringMode) ServesAPIRoutes() bool {
+	return m == "" || m == ModeAll || m == ModeAPI
+}
+
+// parseMeteringModeOrRaw keeps an invalid value in the Config so Validate can
+// reject it, instead of silently falling back to a workload the operator did
+// not ask for.
+func parseMeteringModeOrRaw(raw string) MeteringMode {
+	mode, err := ParseMeteringMode(raw)
+	if err != nil {
+		return MeteringMode(strings.ToLower(strings.TrimSpace(raw)))
+	}
+	return mode
+}
+
+// Config is the resolved runtime configuration.
+type Config struct {
+	// DatabaseURL is the PostgreSQL connection string. Required.
+	DatabaseURL string
+
+	// Port is the HTTP listen port.
+	Port string
+
+	// MetricsPort is the dedicated listen port for the /metrics endpoint.
+	// Served by its own http.Server so scrape traffic never shares the
+	// application listener.
+	MetricsPort string
+
+	// MeteringMode selects the workload this process runs (all, api, rollup).
+	MeteringMode MeteringMode
+
+	// MonthlyTokenQuota caps per-user monthly token usage. Balance checks
+	// report no access once a user exceeds it.
+	MonthlyTokenQuota float64
+	// QuotaEnforcementEnabled controls whether entitlement decisions can block
+	// inference. Usage accounting remains active when this is false.
+	QuotaEnforcementEnabled bool
+
+	// ModelAccessEnforcement controls the new role-based model policy on the
+	// legacy entitlement endpoint: off (legacy behavior), observe (evaluate and
+	// log would-deny, do not block), or enforce (use the new policy).
+	ModelAccessEnforcement string
+
+	// DBMaxOpenConns caps open connections in each database pool
+	// (primary and read replica). Raised from the previous hardcoded value
+	// so bursts of distinct-user balance checks no longer queue past the
+	// gateway's metering deadline.
+	DBMaxOpenConns int
+
+	// DBMaxIdleConns caps idle connections held open per pool.
+	DBMaxIdleConns int
+
+	// DBConnMaxLifetimeSeconds bounds the lifetime of a pooled
+	// connection, guarding against stale connections.
+	DBConnMaxLifetimeSeconds int
+
+	// EventSource labels ingested events that arrive without a
+	// CloudEvents `source` attribute.
+	EventSource string
+
+	// UserHeader and GroupsHeader name the request headers an
+	// authenticating proxy uses to forward the caller's identity.
+	UserHeader   string
+	GroupsHeader string
+
+	// AdminUsers is a break-glass list used only when the Partner identity
+	// store cannot be read. Normal authorization comes from partner_users.role.
+	AdminUsers []string
+
+	// SuperAdminUsers is the break-glass list for operator access when the
+	// Partner identity store cannot be read. Normal authorization comes from
+	// partner_users.role; membership here does not override a stored demotion.
+	SuperAdminUsers []string
+
+	// AllowUnauthenticatedAdmin grants admin access when no identity
+	// header is present. Convenient for local development, unsafe once
+	// the service is exposed.
+	AllowUnauthenticatedAdmin bool
+	// SessionCookieSecure defaults true. Disable only for local HTTP testing.
+	SessionCookieSecure bool
+
+	// DefaultGroup is attributed to callers whose group cannot be
+	// resolved from a header or from the Kubernetes adapter.
+	DefaultGroup string
+	// MonthSpendEnabled switches quota reads to user_month_spend. It must
+	// remain false until the table has been backfilled and verified; writes
+	// maintain the table regardless so it is warm before the switch.
+	MonthSpendEnabled bool
+	// MonthSpendWrites enables the per-event accumulator write. Keep this off
+	// during image rollout and until the accumulator has been backfilled.
+	MonthSpendWrites bool
+
+	// M2MAuthRequired gates the gateway-to-metering endpoints with the
+	// configured bearer secret. Keep this false for local compatibility; GA
+	// deployments must enable it and configure the gateway to send the token.
+	M2MAuthRequired bool
+	M2MSharedSecret string
+
+	// Endpoint-specific credentials protect the partner APIs even when a
+	// request reaches the Service directly. Empty values fail closed with 503.
+	UsageReportAPISecret    string
+	ModelPolicyAPISecret    string
+	UserManagementAPISecret string
+	ModelCatalogAPISecret   string
+	// Additional endpoint credentials allow AIR and AIBT to use separate
+	// least-privilege bearer tokens while preserving the original singular
+	// variables for existing deployments.
+	UsageReportAPISecrets  []string
+	ModelPolicyAPISecrets  []string
+	ModelCatalogAPISecrets []string
+
+	// PartnerUserKeyGroup is the MaaS group presented for every partner key
+	// operation. Deliberately no default: the group must exist in MaaS with
+	// an accessible subscription, and inventing one silently would mint keys
+	// nobody can use. Unset leaves the key endpoints at 503.
+	PartnerUserKeyGroup string
+	// OrgInviteTTLHours bounds a key invite link: a single-use token that
+	// nobody opened is worthless once it expires.
+	OrgInviteTTLHours int
+
+	// KeyRotationOverlapDays is how long the old key stays valid after a
+	// rotation, so nobody's editor dies mid-task. 0 means revoke-on-rotate
+	// (use for a suspected leak).
+	KeyRotationOverlapDays int
+
+	// DashboardCacheTTLSeconds bounds staleness of cached dashboard
+	// responses. It must stay ABOVE the 30s client poll — a shorter TTL
+	// makes every poll arrive after its key expired and the cache misses
+	// nearly all steady-state traffic. The middleware warns at load.
+	DashboardCacheTTLSeconds int
+
+	// DashboardCacheEnabled gates the dashboard response cache. Default
+	// OFF: a new build shipping and caching going live are separate,
+	// deliberate events — enable per deployment and use cache-stats hit
+	// ratio as the go/no-go. Disabling is the one-knob rollback.
+	DashboardCacheEnabled bool
+
+	// ReadDatabaseURL is an optional second pool for dashboard/report
+	// reads only (Phase 2 of docs/dashboard-scaling-plan.md) — point it
+	// at the CNPG read service. Empty (default) keeps every read on the
+	// primary. Enforcement and quota reads ignore this pool by design;
+	// see the readDB allowlist in internal/storage/postgres.go.
+	ReadDatabaseURL string
+
+	// DashboardUseRollups switches the dashboard/report aggregation reads
+	// from raw usage_events to the hourly usage_hourly rollup (Phase 3
+	// part B). Default OFF — same two-decisions rule as the cache flag:
+	// deploying the code and enabling the behavior are separate events,
+	// and the go signal is a green parity report. The read path only
+	// honors this while rollups are backfilled AND the standing parity
+	// check is green; either failing serves raw (see rollups.go).
+	// Enforcement, quota and the Recent feed never read rollups.
+	DashboardUseRollups bool
+
+	// LiveRollupsEnabled controls synchronous usage_hourly updates on the
+	// ingestion path. When LIVE_ROLLUPS_ENABLED is unset, its default follows
+	// DashboardUseRollups: raw-read deployments avoid needless hour locks,
+	// while rollup-read deployments retain current-hour freshness. An explicit
+	// false is permitted for eventually consistent rollup reads, but must be
+	// monitored through the rollup status endpoint.
+	LiveRollupsEnabled bool
+
+	// RollupRefreshSeconds is how often the maintenance loop refreshes
+	// recent hours from raw and runs the standing parity check. Bounds
+	// the self-heal window for the (locked) refresh-vs-insert race and
+	// the standing-parity detection latency.
+	RollupRefreshSeconds int
+
+	// QoS classification (Phase 1). Disabled by default; the entitlement
+	// endpoint stays backward compatible when it is off.
+	QosEnabled bool
+	// QosWindowSeconds is the burst window used for the premium/main and
+	// main/ratelimit boundaries.
+	QosWindowSeconds int
+	// QosHoldWindowSeconds is the longer guard window that prevents rapid
+	// class flapping and catches sustained load.
+	QosHoldWindowSeconds int
+	// QosPremiumMaxTokens is the 60s weighted-token boundary between
+	// premium and main.
+	QosPremiumMaxTokens int64
+	// QosRatelimitMinTokens is the 60s weighted-token boundary at which a
+	// user enters ratelimit.
+	QosRatelimitMinTokens int64
+	// QosHoldMainTokens is the 5m weighted-token boundary between premium
+	// and main.
+	QosHoldMainTokens int64
+	// QosHoldRatelimitTokens is the 5m weighted-token boundary at which a
+	// user enters ratelimit.
+	QosHoldRatelimitTokens int64
+	// QosCacheReadWeight is the weight applied to prompt-cache reads when
+	// computing weighted token usage. Uncached input, cache writes, and
+	// output are weighted 1.0; output already includes reasoning tokens.
+	QosCacheReadWeight float64
+	// QosClassCacheSeconds bounds staleness of the short-window class
+	// decision. The 5m guard has its own, longer cache.
+	QosClassCacheSeconds int
+	// QosHoldCacheSeconds bounds staleness of the 5m guard.
+	QosHoldCacheSeconds int
+	// QosProviders is the set of usage_events providers that count toward
+	// the shared/free-capacity class. Today this is cb-glm.
+	QosProviders []string
+	// QosExemptTagKey/Value exempts a partner user from QoS when their
+	// tags contain the configured key/value (for example origin=loadtest).
+	QosExemptTagKey   string
+	QosExemptTagValue string
+	// QosKeyAlias* map the final class to the gateway's local key-ring
+	// alias. The aliases name keys; they never contain key material.
+	QosKeyAliasPremium   string
+	QosKeyAliasMain      string
+	QosKeyAliasRatelimit string
+
+	KeyService KeyService
+	Kubernetes Kubernetes
+	Welcome    Welcome
+	OIDC       OIDC
+	KeyPolicy  KeyPolicy
+}
+
+// KeyPolicy controls the lifetime of self-service API keys created from the
+// personal API Keys tab.
+type KeyPolicy struct {
+	DefaultExpiryHours int
+	MaxExpiryHours     int
+	AllowNoExpiry      bool
+}
+
+// OIDC contains the optional corporate SSO configuration. It is deliberately
+// disabled by default: shipping OIDC code must not change the production login
+// path until the provider, redirect URI, and rollout have been reviewed.
+type OIDC struct {
+	Enabled     bool
+	ClaimsDebug bool
+	// DevelopmentMode is a separate explicit gate for local/stage-only OIDC
+	// diagnostics and persona login shortcuts.
+	DevelopmentMode bool
+	// TestLogin exposes local persona shortcuts on the login page and forwards
+	// a persona hint to the identity provider. It exists purely for the local
+	// mock IdP; leave it false everywhere else.
+	TestLogin    bool
+	IssuerURL    string
+	ClientID     string
+	ClientSecret string
+	RedirectURL  string
+	// PostLogoutRedirectURL is sent to the provider's end-session endpoint
+	// after RP-initiated logout. It must be registered with the provider; leave
+	// empty to let the provider show its own signed-out page.
+	PostLogoutRedirectURL string
+	Scopes                []string
+}
+
+func (o OIDC) EnabledAndConfigured() bool {
+	return o.Enabled && o.IssuerURL != "" && o.ClientID != "" &&
+		o.ClientSecret != "" && o.RedirectURL != ""
+}
+
+// Welcome holds the public gateway endpoints surfaced on the
+// unauthenticated /welcome page. The URLs are injected into the
+// page at serve time from the deployment environment instead of being
+// written into the template, so no cluster-specific host ever lands in the
+// repository.
+type Welcome struct {
+	// GatewayURL is the single public gateway host. API clients append their
+	// dialect-specific path (for example /v1/messages or /v1/responses).
+	GatewayURL string
+	// DashboardURL is this service's public base URL, as users reach it.
+	DashboardURL string
+}
+
+// KeyService describes an optional upstream that issues and revokes API
+// keys on behalf of the signed-in user. Disabled unless URL is set.
+type KeyService struct {
+	// URL is the base URL of the key-issuing API.
+	URL string
+
+	// UserHeader, GroupsHeader, and TenantHeader name the headers used to
+	// forward caller identity upstream.
+	UserHeader   string
+	GroupsHeader string
+	TenantHeader string
+
+	// Tenant is sent in TenantHeader on every upstream call.
+	Tenant string
+
+	// InsecureSkipVerify disables TLS verification against the upstream.
+	// Intended for clusters using self-signed internal certificates.
+	InsecureSkipVerify bool
+}
+
+// Enabled reports whether the key-service proxy should be served.
+func (k KeyService) Enabled() bool { return k.URL != "" }
+
+// Kubernetes describes an optional adapter that reads a model catalogue
+// from custom resources. The resource coordinates are configurable
+// because every gateway models its catalogue differently; the adapter
+// stays disabled until at least one group is supplied.
+type Kubernetes struct {
+	// Namespace holds the model and provider custom resources.
+	Namespace string
+
+	// Model and Provider custom resource coordinates.
+	ModelGroup       string
+	ModelVersion     string
+	ModelResource    string
+	ProviderGroup    string
+	ProviderVersion  string
+	ProviderResource string
+
+	// ModelFallbackGroup is consulted when the primary model resource
+	// returns nothing, which helps during a catalogue migration between
+	// two API groups. Optional.
+	ModelFallbackGroup string
+
+	// GroupGroup, GroupVersion, and GroupResource locate a cluster-scoped
+	// resource that maps users to groups. Optional.
+	GroupGroup    string
+	GroupVersion  string
+	GroupResource string
+
+	// PipelineConfigMap names a ConfigMap describing the gateway's filter
+	// pipeline, surfaced read-only in the admin console. Optional.
+	PipelineConfigMap          string
+	PipelineConfigMapNamespace string
+	PipelineConfigMapKey       string
+
+	// RoutingOverlayConfigMaps names the ConfigMaps holding the gateway's
+	// intelligent_route routing overlays (comma-separated). Each overlay's
+	// routing-overlay.json key holds a candidate list that serves as the
+	// model catalogue when the gateway uses overlay-based routing (the
+	// PR-12 migration and later). Defaults to the standard EnMaaS overlay
+	// names; empty disables the overlay path. Optional.
+	RoutingOverlayConfigMaps []string
+
+	// SubscriptionName names the MaaSSubscription CR (in Namespace) whose
+	// spec.owner.groups is the canonical, live list of valid org groups.
+	SubscriptionName string
+}
+
+// Enabled reports whether the Kubernetes adapter should be initialised.
+func (k Kubernetes) Enabled() bool {
+	return k.ModelGroup != "" || k.ProviderGroup != "" || k.PipelineConfigMap != "" || len(k.RoutingOverlayConfigMaps) > 0
+}
+
+// Load resolves configuration from the environment.
+func Load() Config {
+	dashboardUseRollups := envBool("DASHBOARD_USE_ROLLUPS", false)
+	// Preserve the old freshness behavior whenever a deployment explicitly
+	// enables rollup reads, while making the raw-read default safe for the
+	// hour-wide live-upsert lock. Operators can explicitly override either
+	// side of the matrix with LIVE_ROLLUPS_ENABLED.
+	liveRollupsEnabled := envBool("LIVE_ROLLUPS_ENABLED", dashboardUseRollups)
+
+	modelGroup := os.Getenv("MODEL_CRD_GROUP")
+	providerGroup := os.Getenv("PROVIDER_CRD_GROUP")
+	pipelineConfigMap := os.Getenv("PIPELINE_CONFIGMAP")
+	overlayConfigMaps := envList("ROUTING_OVERLAY_CONFIGMAPS")
+	if _, explicit := os.LookupEnv("ROUTING_OVERLAY_CONFIGMAPS"); !explicit && (modelGroup != "" || providerGroup != "" || pipelineConfigMap != "") {
+		overlayConfigMaps = []string{"praxis-routing-openai", "praxis-routing-unified"}
+	}
+
+	return Config{
+		DatabaseURL:       os.Getenv("DATABASE_URL"),
+		Port:              envDefault("PORT", "8080"),
+		MetricsPort:       envDefault("METRICS_PORT", "9902"),
+		MeteringMode:      parseMeteringModeOrRaw(os.Getenv("METERING_MODE")),
+		MonthlyTokenQuota: envFloat("MONTHLY_TOKEN_QUOTA", DefaultMonthlyTokenQuota),
+		// The $600 safety net is on by default. Operators can still use the
+		// environment as a deployment-level kill switch while the policy's
+		// enforced field is the normal super-admin control.
+		QuotaEnforcementEnabled:  envBool("QUOTA_ENFORCEMENT_ENABLED", true),
+		ModelAccessEnforcement:   envDefault("MODEL_ACCESS_ENFORCEMENT", "off"),
+		DBMaxOpenConns:           envInt("DB_MAX_OPEN_CONNS", 50),
+		DBMaxIdleConns:           envInt("DB_MAX_IDLE_CONNS", 10),
+		DBConnMaxLifetimeSeconds: envInt("DB_CONN_MAX_LIFETIME_SECONDS", 14400),
+		EventSource:              envDefault("EVENT_SOURCE", "ai-gateway"),
+		UserHeader:               envDefault("AUTH_USER_HEADER", "X-Forwarded-User"),
+		GroupsHeader:             envDefault("AUTH_GROUPS_HEADER", "X-Forwarded-Groups"),
+		AdminUsers:               envList("ADMIN_USERS"),
+		// The gateway operators. Set via the SUPERADMIN_USERS deployment
+		// env var (comma/space separated); empty means no one holds the
+		// super-admin surfaces, so the deployment must set it explicitly.
+		SuperAdminUsers: envList("SUPERADMIN_USERS"),
+		// Default false: since the org/manager feature this service decides
+		// who may see whose spend, so an anonymous caller is nobody. Set
+		// ALLOW_UNAUTHENTICATED_ADMIN=true deliberately for local
+		// development only.
+		AllowUnauthenticatedAdmin: envBool("ALLOW_UNAUTHENTICATED_ADMIN", false),
+		SessionCookieSecure:       envBool("SESSION_COOKIE_SECURE", true),
+		DefaultGroup:              envDefault("DEFAULT_GROUP", "default"),
+		MonthSpendEnabled:         envBool("MONTH_SPEND_ENABLED", false),
+		MonthSpendWrites:          envBool("MONTH_SPEND_WRITE_ENABLED", false),
+		M2MAuthRequired:           envBool("M2M_AUTH_REQUIRED", false),
+		M2MSharedSecret:           os.Getenv("M2M_SHARED_SECRET"),
+		UsageReportAPISecret:      os.Getenv("USAGE_REPORT_API_SECRET"),
+		ModelPolicyAPISecret:      os.Getenv("MODEL_POLICY_API_SECRET"),
+		UserManagementAPISecret:   os.Getenv("USER_MANAGEMENT_API_SECRET"),
+		ModelCatalogAPISecret:     os.Getenv("MODEL_CATALOG_API_SECRET"),
+		UsageReportAPISecrets:     envSecrets("USAGE_REPORT_API_SECRET", "USAGE_REPORT_API_SECRET_AIR", "USAGE_REPORT_API_SECRET_AIBT"),
+		ModelPolicyAPISecrets:     envSecrets("MODEL_POLICY_API_SECRET", "MODEL_POLICY_API_SECRET_AIBT"),
+		ModelCatalogAPISecrets:    envSecrets("MODEL_CATALOG_API_SECRET", "MODEL_CATALOG_API_SECRET_AIBT"),
+		PartnerUserKeyGroup:       os.Getenv("PARTNER_USER_KEY_GROUP"),
+		OrgInviteTTLHours:         envInt("ORG_INVITE_TTL_HOURS", 72),
+		KeyRotationOverlapDays:    envInt("KEY_ROTATION_OVERLAP_DAYS", 7),
+		// Off by default (PR #19 review): shipping the build must not be
+		// the same event as turning caching on. Enable per deployment with
+		// DASHBOARD_CACHE_ENABLED=true and watch /api/v1/admin/cache-stats
+		// — the hit ratio is the go/no-go, and disabling is a one-knob
+		// redeploy.
+		DashboardCacheTTLSeconds: envInt("DASHBOARD_CACHE_TTL_SECONDS", 60),
+		DashboardCacheEnabled:    envBool("DASHBOARD_CACHE_ENABLED", false),
+		ReadDatabaseURL:          os.Getenv("READ_DATABASE_URL"),
+		DashboardUseRollups:      dashboardUseRollups,
+		LiveRollupsEnabled:       liveRollupsEnabled,
+		RollupRefreshSeconds:     envInt("ROLLUP_REFRESH_SECONDS", 300),
+		QosEnabled:               envBool("QOS_ENABLED", false),
+		QosWindowSeconds:         envInt("QOS_WINDOW_SECONDS", 60),
+		QosHoldWindowSeconds:     envInt("QOS_HOLD_WINDOW_SECONDS", 300),
+		QosPremiumMaxTokens:      envInt64("QOS_PREMIUM_MAX_TOKENS", 600_000),
+		QosRatelimitMinTokens:    envInt64("QOS_RATELIMIT_MIN_TOKENS", 2_000_000),
+		QosHoldMainTokens:        envInt64("QOS_HOLD_MAIN_TOKENS", 3_000_000),
+		QosHoldRatelimitTokens:   envInt64("QOS_HOLD_RATELIMIT_TOKENS", 10_000_000),
+		QosCacheReadWeight:       envFloat("QOS_CACHE_READ_WEIGHT", 0.05),
+		QosClassCacheSeconds:     envInt("QOS_CLASS_CACHE_SECONDS", 15),
+		QosHoldCacheSeconds:      envInt("QOS_HOLD_CACHE_SECONDS", 60),
+		QosProviders:             qosProviders(),
+		QosExemptTagKey:          envDefault("QOS_EXEMPT_TAG_KEY", "origin"),
+		QosExemptTagValue:        envDefault("QOS_EXEMPT_TAG_VALUE", "loadtest"),
+		QosKeyAliasPremium:       envDefault("QOS_KEY_ALIAS_PREMIUM", "premium"),
+		QosKeyAliasMain:          envDefault("QOS_KEY_ALIAS_MAIN", "main"),
+		QosKeyAliasRatelimit:     envDefault("QOS_KEY_ALIAS_RATELIMIT", "main"),
+		KeyService: KeyService{
+			URL:                strings.TrimSuffix(os.Getenv("KEY_SERVICE_URL"), "/"),
+			UserHeader:         envDefault("KEY_SERVICE_USER_HEADER", "X-Auth-Username"),
+			GroupsHeader:       envDefault("KEY_SERVICE_GROUPS_HEADER", "X-Auth-Groups"),
+			TenantHeader:       envDefault("KEY_SERVICE_TENANT_HEADER", "X-Auth-Tenant"),
+			Tenant:             os.Getenv("KEY_SERVICE_TENANT"),
+			InsecureSkipVerify: envBool("KEY_SERVICE_INSECURE_SKIP_VERIFY", false),
+		},
+		Welcome: Welcome{
+			GatewayURL:   strings.TrimSuffix(os.Getenv("WELCOME_GATEWAY_URL"), "/"),
+			DashboardURL: strings.TrimSuffix(os.Getenv("WELCOME_DASHBOARD_URL"), "/"),
+		},
+		OIDC: OIDC{
+			Enabled:               envBool("OIDC_ENABLED", false),
+			ClaimsDebug:           envBool("OIDC_CLAIMS_DEBUG", false),
+			DevelopmentMode:       envBool("OIDC_DEVELOPMENT_MODE", false),
+			TestLogin:             envBool("OIDC_TEST_LOGIN", false),
+			IssuerURL:             strings.TrimSuffix(os.Getenv("OIDC_ISSUER_URL"), "/"),
+			ClientID:              os.Getenv("OIDC_CLIENT_ID"),
+			ClientSecret:          os.Getenv("OIDC_CLIENT_SECRET"),
+			RedirectURL:           os.Getenv("OIDC_REDIRECT_URL"),
+			PostLogoutRedirectURL: os.Getenv("OIDC_POST_LOGOUT_REDIRECT_URL"),
+			Scopes:                envListDefault("OIDC_SCOPES", []string{"openid", "profile", "email", "groups"}),
+		},
+		KeyPolicy: KeyPolicy{
+			DefaultExpiryHours: envInt("DEFAULT_KEY_EXPIRY_HOURS", 90*24),
+			MaxExpiryHours:     envInt("MAX_KEY_EXPIRY_HOURS", 365*24),
+			AllowNoExpiry:      envBool("ALLOW_NO_EXPIRY", false),
+		},
+		Kubernetes: Kubernetes{
+			Namespace:                  envDefault("K8S_NAMESPACE", "default"),
+			ModelGroup:                 modelGroup,
+			ModelVersion:               envDefault("MODEL_CRD_VERSION", "v1alpha1"),
+			ModelResource:              envDefault("MODEL_CRD_RESOURCE", "externalmodels"),
+			ProviderGroup:              providerGroup,
+			ProviderVersion:            envDefault("PROVIDER_CRD_VERSION", "v1alpha1"),
+			ProviderResource:           envDefault("PROVIDER_CRD_RESOURCE", "externalproviders"),
+			ModelFallbackGroup:         os.Getenv("MODEL_CRD_FALLBACK_GROUP"),
+			GroupGroup:                 os.Getenv("GROUP_CRD_GROUP"),
+			GroupVersion:               envDefault("GROUP_CRD_VERSION", "v1"),
+			GroupResource:              envDefault("GROUP_CRD_RESOURCE", "groups"),
+			PipelineConfigMap:          pipelineConfigMap,
+			PipelineConfigMapNamespace: os.Getenv("PIPELINE_CONFIGMAP_NAMESPACE"),
+			PipelineConfigMapKey:       envDefault("PIPELINE_CONFIGMAP_KEY", "config.yaml"),
+			RoutingOverlayConfigMaps:   overlayConfigMaps,
+			SubscriptionName:           envDefault("MAAS_SUBSCRIPTION_NAME", "dogfood-team"),
+		},
+	}
+}
+
+// Validate rejects enum-valued settings that Load keeps raw so a typo fails
+// startup instead of silently running the wrong workload.
+func (c Config) Validate() error {
+	if _, err := ParseMeteringMode(string(c.MeteringMode)); err != nil {
+		return err
+	}
+	switch strings.ToLower(strings.TrimSpace(c.ModelAccessEnforcement)) {
+	case "", "off", "observe", "enforce":
+	default:
+		return fmt.Errorf("MODEL_ACCESS_ENFORCEMENT must be off, observe, or enforce, got %q", c.ModelAccessEnforcement)
+	}
+	return nil
+}
+
+func envDefault(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
+// envList parses a user/identity list from an env var. Entries may be
+// separated by commas, whitespace, or any mix of the two — the deployment
+// manifests use both (ADMIN_USERS is comma-separated, SUPERADMIN_USERS is
+// space-separated), and a list that only splits on commas silently collapses
+// the space-separated form into one bogus entry that never matches a caller.
+func envList(key string) []string {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return nil
+	}
+	parts := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || unicode.IsSpace(r)
+	})
+	var result []string
+	for _, p := range parts {
+		if trimmed := strings.TrimSpace(p); trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
+}
+
+// qosProviders returns the configured shared/free usage providers. The
+// default keeps existing EnMaaS deployments working without a new env var;
+// an explicit empty value is treated as the default as well.
+func qosProviders() []string {
+	providers := envList("QOS_PROVIDERS")
+	if len(providers) == 0 {
+		return []string{"cb-glm"}
+	}
+	return providers
+}
+
+func envSecrets(keys ...string) []string {
+	var result []string
+	seen := make(map[string]struct{})
+	for _, key := range keys {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			if _, ok := seen[value]; !ok {
+				result = append(result, value)
+				seen[value] = struct{}{}
+			}
+		}
+	}
+	return result
+}
+
+func envListDefault(key string, fallback []string) []string {
+	values := envList(key)
+	if len(values) == 0 {
+		return append([]string(nil), fallback...)
+	}
+	return values
+}
+
+func envInt(key string, fallback int) int {
+	if v, err := strconv.Atoi(os.Getenv(key)); err == nil && v >= 0 {
+		return v
+	}
+	return fallback
+}
+
+func envInt64(key string, fallback int64) int64 {
+	if v, err := strconv.ParseInt(os.Getenv(key), 10, 64); err == nil && v >= 0 {
+		return v
+	}
+	return fallback
+}
+
+func envBool(key string, fallback bool) bool {
+	v, err := strconv.ParseBool(os.Getenv(key))
+	if err != nil {
+		return fallback
+	}
+	return v
+}
+
+func envFloat(key string, fallback float64) float64 {
+	v, err := strconv.ParseFloat(os.Getenv(key), 64)
+	if err != nil || v <= 0 {
+		return fallback
+	}
+	return v
+}

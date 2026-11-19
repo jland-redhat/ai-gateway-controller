@@ -1,0 +1,3 @@
+# Local LDAP sync service secrets/configuration and generated snapshots
+deploy/ldap-sync/.env
+deploy/ldap-sync/output/

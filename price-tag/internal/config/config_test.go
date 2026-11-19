@@ -1,0 +1,339 @@
+package config
+
+import (
+	"os"
+	"reflect"
+	"testing"
+)
+
+// envList backs ADMIN_USERS / SUPERADMIN_USERS, which gate the admin and
+// super-admin surfaces. The deployment sets one comma-separated and one
+// space-separated, so both forms (and a mix) must parse into individual
+// identities — a whole list collapsed into one entry silently denies access.
+func unsetEnv(t *testing.T, key string) {
+	t.Helper()
+	value, set := os.LookupEnv(key)
+	if err := os.Unsetenv(key); err != nil {
+		t.Fatalf("unset %s: %v", key, err)
+	}
+	t.Cleanup(func() {
+		if set {
+			_ = os.Setenv(key, value)
+		} else {
+			_ = os.Unsetenv(key)
+		}
+	})
+}
+
+func TestKubernetesOverlayConfiguration(t *testing.T) {
+	for _, key := range []string{"MODEL_CRD_GROUP", "PROVIDER_CRD_GROUP", "PIPELINE_CONFIGMAP", "ROUTING_OVERLAY_CONFIGMAPS"} {
+		unsetEnv(t, key)
+	}
+	cfg := Load()
+	if cfg.Kubernetes.Enabled() {
+		t.Fatal("Kubernetes adapter must remain disabled when no source is configured")
+	}
+	if len(cfg.Kubernetes.RoutingOverlayConfigMaps) != 0 {
+		t.Fatalf("overlay defaults must not enable the adapter implicitly: %v", cfg.Kubernetes.RoutingOverlayConfigMaps)
+	}
+
+	t.Setenv("MODEL_CRD_GROUP", "example.com")
+	cfg = Load()
+	wantDefault := []string{"praxis-routing-openai", "praxis-routing-unified"}
+	if !reflect.DeepEqual(cfg.Kubernetes.RoutingOverlayConfigMaps, wantDefault) {
+		t.Fatalf("overlay default = %v, want %v", cfg.Kubernetes.RoutingOverlayConfigMaps, wantDefault)
+	}
+	if !cfg.Kubernetes.Enabled() {
+		t.Fatal("Kubernetes adapter must be enabled when a CRD source is configured")
+	}
+
+	unsetEnv(t, "MODEL_CRD_GROUP")
+	t.Setenv("ROUTING_OVERLAY_CONFIGMAPS", "custom-a,custom-b")
+	cfg = Load()
+	wantCustom := []string{"custom-a", "custom-b"}
+	if !reflect.DeepEqual(cfg.Kubernetes.RoutingOverlayConfigMaps, wantCustom) {
+		t.Fatalf("explicit overlays = %v, want %v", cfg.Kubernetes.RoutingOverlayConfigMaps, wantCustom)
+	}
+	if !cfg.Kubernetes.Enabled() {
+		t.Fatal("overlay-only configuration must enable the Kubernetes adapter")
+	}
+
+	t.Setenv("MODEL_CRD_GROUP", "example.com")
+	t.Setenv("ROUTING_OVERLAY_CONFIGMAPS", "")
+	cfg = Load()
+	if !cfg.Kubernetes.Enabled() {
+		t.Fatal("Kubernetes adapter must remain enabled for the CRD source")
+	}
+	if len(cfg.Kubernetes.RoutingOverlayConfigMaps) != 0 {
+		t.Fatalf("explicitly empty overlay configuration must disable the overlay path: %v", cfg.Kubernetes.RoutingOverlayConfigMaps)
+	}
+}
+
+func TestEnvList_Separators(t *testing.T) {
+	cases := map[string][]string{
+		"a@x.com,b@x.com":            {"a@x.com", "b@x.com"},
+		"a@x.com b@x.com":            {"a@x.com", "b@x.com"},
+		"a@x.com, b@x.com   c@x.com": {"a@x.com", "b@x.com", "c@x.com"},
+		"  ":                         nil,
+		"":                           nil,
+	}
+	for raw, want := range cases {
+		t.Setenv("TEST_ENV_LIST", raw)
+		if got := envList("TEST_ENV_LIST"); !reflect.DeepEqual(got, want) {
+			t.Errorf("envList(%q) = %v, want %v", raw, got, want)
+		}
+	}
+}
+
+// The read switch follows the cache-flag rule (PR #19 review, part B
+// condition 1): deploying a build and enabling behavior are separate
+// decisions, so the read default is OFF / 300s. Live writes follow the read
+// default unless the deployment explicitly overrides them, which avoids the
+// ingestion lock when the dashboard still serves raw events.
+func TestRollupReadSwitchDefaults(t *testing.T) {
+	t.Setenv("DASHBOARD_USE_ROLLUPS", "")
+	t.Setenv("LIVE_ROLLUPS_ENABLED", "")
+	t.Setenv("ROLLUP_REFRESH_SECONDS", "")
+	cfg := Load()
+	if cfg.DashboardUseRollups {
+		t.Error("DashboardUseRollups must default OFF — rollup reads are enabled per deployment, not by shipping the code")
+	}
+	if cfg.LiveRollupsEnabled {
+		t.Error("LiveRollupsEnabled must default OFF — synchronous rollup writes are enabled per deployment")
+	}
+	if cfg.RollupRefreshSeconds != 300 {
+		t.Errorf("RollupRefreshSeconds default = %d, want 300 (bounds refresh and parity-check latency)", cfg.RollupRefreshSeconds)
+	}
+}
+
+func TestRollupConfigurationMatrix(t *testing.T) {
+	tests := []struct {
+		name       string
+		reads      string
+		live       string
+		wantReads  bool
+		wantWrites bool
+	}{
+		{name: "raw reads and live writes off", reads: "false", live: "false", wantReads: false, wantWrites: false},
+		{name: "raw reads and live writes on", reads: "false", live: "true", wantReads: false, wantWrites: true},
+		{name: "rollup reads and live writes off", reads: "true", live: "false", wantReads: true, wantWrites: false},
+		{name: "rollup reads and live writes on", reads: "true", live: "true", wantReads: true, wantWrites: true},
+		{name: "rollup reads default to live writes", reads: "true", live: "", wantReads: true, wantWrites: true},
+		{name: "raw reads default to live writes off", reads: "false", live: "", wantReads: false, wantWrites: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("DASHBOARD_USE_ROLLUPS", tt.reads)
+			if tt.live == "" {
+				t.Setenv("LIVE_ROLLUPS_ENABLED", "")
+			} else {
+				t.Setenv("LIVE_ROLLUPS_ENABLED", tt.live)
+			}
+			cfg := Load()
+			if cfg.DashboardUseRollups != tt.wantReads {
+				t.Errorf("DashboardUseRollups = %v, want %v", cfg.DashboardUseRollups, tt.wantReads)
+			}
+			if cfg.LiveRollupsEnabled != tt.wantWrites {
+				t.Errorf("LiveRollupsEnabled = %v, want %v", cfg.LiveRollupsEnabled, tt.wantWrites)
+			}
+		})
+	}
+}
+
+func TestQuotaEnforcementDefaultsEnabled(t *testing.T) {
+	os.Unsetenv("QUOTA_ENFORCEMENT_ENABLED")
+	if cfg := Load(); !cfg.QuotaEnforcementEnabled {
+		t.Fatal("quota enforcement must default enabled for the safety net")
+	}
+	t.Setenv("QUOTA_ENFORCEMENT_ENABLED", "true")
+	if cfg := Load(); !cfg.QuotaEnforcementEnabled {
+		t.Fatal("explicit quota enforcement enablement was ignored")
+	}
+}
+
+func TestPartnerAPISecretsLoadFromEnvironment(t *testing.T) {
+	t.Setenv("USAGE_REPORT_API_SECRET", "usage")
+	t.Setenv("MODEL_POLICY_API_SECRET", "policy")
+	t.Setenv("USER_MANAGEMENT_API_SECRET", "users")
+	t.Setenv("MODEL_CATALOG_API_SECRET", "catalog")
+	cfg := Load()
+	if cfg.UsageReportAPISecret != "usage" || cfg.ModelPolicyAPISecret != "policy" ||
+		cfg.UserManagementAPISecret != "users" || cfg.ModelCatalogAPISecret != "catalog" {
+		t.Fatalf("partner API secrets did not load from environment")
+	}
+}
+
+func TestPartnerAPIAdditionalSecretsLoadFromEnvironment(t *testing.T) {
+	t.Setenv("USAGE_REPORT_API_SECRET", "legacy-usage")
+	t.Setenv("USAGE_REPORT_API_SECRET_AIR", "air-usage")
+	t.Setenv("USAGE_REPORT_API_SECRET_AIBT", "aibt-usage")
+	t.Setenv("MODEL_POLICY_API_SECRET", "legacy-policy")
+	t.Setenv("MODEL_POLICY_API_SECRET_AIBT", "aibt-policy")
+	t.Setenv("MODEL_CATALOG_API_SECRET", "legacy-catalog")
+	t.Setenv("MODEL_CATALOG_API_SECRET_AIBT", "aibt-catalog")
+	cfg := Load()
+	wantUsage := []string{"legacy-usage", "air-usage", "aibt-usage"}
+	wantPolicy := []string{"legacy-policy", "aibt-policy"}
+	wantCatalog := []string{"legacy-catalog", "aibt-catalog"}
+	if !reflect.DeepEqual(cfg.UsageReportAPISecrets, wantUsage) ||
+		!reflect.DeepEqual(cfg.ModelPolicyAPISecrets, wantPolicy) ||
+		!reflect.DeepEqual(cfg.ModelCatalogAPISecrets, wantCatalog) {
+		t.Fatalf("additional partner API secrets loaded incorrectly: usage=%v policy=%v catalog=%v", cfg.UsageReportAPISecrets, cfg.ModelPolicyAPISecrets, cfg.ModelCatalogAPISecrets)
+	}
+}
+
+func TestOIDCIsDisabledByDefaultAndLoadsConfiguration(t *testing.T) {
+	for _, key := range []string{"OIDC_ENABLED", "OIDC_CLAIMS_DEBUG", "OIDC_DEVELOPMENT_MODE", "OIDC_TEST_LOGIN", "OIDC_ISSUER_URL", "OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET", "OIDC_REDIRECT_URL", "OIDC_SCOPES"} {
+		t.Setenv(key, "")
+	}
+	cfg := Load()
+	if cfg.OIDC.Enabled || cfg.OIDC.EnabledAndConfigured() {
+		t.Fatal("OIDC must be disabled and unconfigured by default")
+	}
+	t.Setenv("OIDC_ENABLED", "true")
+	t.Setenv("OIDC_ISSUER_URL", "https://issuer.example")
+	t.Setenv("OIDC_CLIENT_ID", "client")
+	t.Setenv("OIDC_CLIENT_SECRET", "secret")
+	t.Setenv("OIDC_REDIRECT_URL", "https://dashboard.example/oauth/callback")
+	t.Setenv("OIDC_SCOPES", "openid profile email groups")
+	t.Setenv("OIDC_DEVELOPMENT_MODE", "true")
+	cfg = Load()
+	if !cfg.OIDC.EnabledAndConfigured() {
+		t.Fatal("complete OIDC configuration was not recognized")
+	}
+	if !reflect.DeepEqual(cfg.OIDC.Scopes, []string{"openid", "profile", "email", "groups"}) {
+		t.Fatalf("OIDC scopes = %v", cfg.OIDC.Scopes)
+	}
+	if !cfg.OIDC.DevelopmentMode {
+		t.Fatal("OIDC_DEVELOPMENT_MODE=true was not loaded")
+	}
+}
+
+// DB pool envs control database/sql pool sizing. Unset values must fall
+// back to the defaults that lift metering off the 5s gateway deadline
+// under distinct-user bursts; set values must win.
+func TestDBPoolEnv(t *testing.T) {
+	os.Unsetenv("DB_MAX_OPEN_CONNS")
+	os.Unsetenv("DB_MAX_IDLE_CONNS")
+	os.Unsetenv("DB_CONN_MAX_LIFETIME_SECONDS")
+	cfg := Load()
+	if cfg.DBMaxOpenConns != 50 {
+		t.Errorf("DBMaxOpenConns default = %d, want 50", cfg.DBMaxOpenConns)
+	}
+	if cfg.DBMaxIdleConns != 10 {
+		t.Errorf("DBMaxIdleConns default = %d, want 10", cfg.DBMaxIdleConns)
+	}
+	if cfg.DBConnMaxLifetimeSeconds != 14400 {
+		t.Errorf("DBConnMaxLifetimeSeconds default = %d, want 14400", cfg.DBConnMaxLifetimeSeconds)
+	}
+	t.Setenv("DB_MAX_OPEN_CONNS", "37")
+	t.Setenv("DB_MAX_IDLE_CONNS", "9")
+	t.Setenv("DB_CONN_MAX_LIFETIME_SECONDS", "3600")
+	cfg = Load()
+	if cfg.DBMaxOpenConns != 37 || cfg.DBMaxIdleConns != 9 || cfg.DBConnMaxLifetimeSeconds != 3600 {
+		t.Errorf("DB pool env overrides not honored: %+v", cfg)
+	}
+}
+
+func TestParseMeteringMode(t *testing.T) {
+	cases := []struct {
+		raw     string
+		want    MeteringMode
+		wantErr bool
+	}{
+		{"", ModeAll, false},
+		{"all", ModeAll, false},
+		{"API", ModeAPI, false},
+		{" rollup ", ModeRollup, false},
+		{"rolup", "", true},
+		{"core", "", true},
+	}
+	for _, tc := range cases {
+		got, err := ParseMeteringMode(tc.raw)
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("ParseMeteringMode(%q) = %q, want error", tc.raw, got)
+			}
+			continue
+		}
+		if err != nil || got != tc.want {
+			t.Errorf("ParseMeteringMode(%q) = %q, %v; want %q", tc.raw, got, err, tc.want)
+		}
+	}
+}
+
+func TestMeteringModeWorkloads(t *testing.T) {
+	cases := []struct {
+		mode        MeteringMode
+		api         bool
+		maintenance bool
+	}{
+		{ModeAll, true, true},
+		{ModeAPI, true, false},
+		{ModeRollup, false, true},
+		{"", true, true},
+	}
+	for _, tc := range cases {
+		if got := tc.mode.ServesAPIRoutes(); got != tc.api {
+			t.Errorf("%q.ServesAPIRoutes() = %v, want %v", tc.mode, got, tc.api)
+		}
+		if got := tc.mode.RunsMaintenance(); got != tc.maintenance {
+			t.Errorf("%q.RunsMaintenance() = %v, want %v", tc.mode, got, tc.maintenance)
+		}
+	}
+}
+
+func TestValidateRejectsInvalidMeteringMode(t *testing.T) {
+	t.Setenv("METERING_MODE", "rolup")
+	cfg := Load()
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() accepted an invalid METERING_MODE")
+	}
+	if cfg.MeteringMode.ServesAPIRoutes() || cfg.MeteringMode.RunsMaintenance() {
+		t.Errorf("invalid mode %q must not silently enable a workload", cfg.MeteringMode)
+	}
+
+	t.Setenv("METERING_MODE", "api")
+	cfg = Load()
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() rejected api: %v", err)
+	}
+	if !cfg.MeteringMode.ServesAPIRoutes() || cfg.MeteringMode.RunsMaintenance() {
+		t.Errorf("api mode workloads = api:%v maintenance:%v, want true/false",
+			cfg.MeteringMode.ServesAPIRoutes(), cfg.MeteringMode.RunsMaintenance())
+	}
+}
+
+func TestQosKeyAliasConfiguration(t *testing.T) {
+	keys := []string{"QOS_KEY_ALIAS_PREMIUM", "QOS_KEY_ALIAS_MAIN", "QOS_KEY_ALIAS_RATELIMIT"}
+	for _, key := range keys {
+		unsetEnv(t, key)
+	}
+	cfg := Load()
+	if cfg.QosKeyAliasPremium != "premium" || cfg.QosKeyAliasMain != "main" || cfg.QosKeyAliasRatelimit != "main" {
+		t.Fatalf("alias defaults = %q/%q/%q, want premium/main/main",
+			cfg.QosKeyAliasPremium, cfg.QosKeyAliasMain, cfg.QosKeyAliasRatelimit)
+	}
+
+	t.Setenv("QOS_KEY_ALIAS_PREMIUM", "premium-key")
+	t.Setenv("QOS_KEY_ALIAS_MAIN", "main-key")
+	t.Setenv("QOS_KEY_ALIAS_RATELIMIT", "ratelimit-key")
+	cfg = Load()
+	if cfg.QosKeyAliasPremium != "premium-key" || cfg.QosKeyAliasMain != "main-key" || cfg.QosKeyAliasRatelimit != "ratelimit-key" {
+		t.Fatalf("alias overrides = %q/%q/%q, want premium-key/main-key/ratelimit-key",
+			cfg.QosKeyAliasPremium, cfg.QosKeyAliasMain, cfg.QosKeyAliasRatelimit)
+	}
+}
+
+func TestValidateRejectsInvalidModelAccessEnforcement(t *testing.T) {
+	t.Setenv("MODEL_ACCESS_ENFORCEMENT", "enforc")
+	if err := Load().Validate(); err == nil {
+		t.Fatal("Validate() accepted an invalid MODEL_ACCESS_ENFORCEMENT")
+	}
+	for _, mode := range []string{"off", "observe", "enforce", "ENFORCE"} {
+		t.Setenv("MODEL_ACCESS_ENFORCEMENT", mode)
+		if err := Load().Validate(); err != nil {
+			t.Fatalf("Validate() rejected %q: %v", mode, err)
+		}
+	}
+}

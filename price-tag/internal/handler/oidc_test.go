@@ -1,0 +1,233 @@
+package handler
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/redhat-et/pricetag-metering/internal/config"
+)
+
+func TestOIDCStateCookieRoundTripAndTamperProtection(t *testing.T) {
+	t.Setenv("SESSION_SECRET", "test-session-secret")
+	h := NewAuthHandler(config.Config{})
+	state := oidcState{
+		State: "state", Nonce: "nonce", CodeVerifier: "verifier",
+		Exp: time.Now().Add(time.Minute).Unix(),
+	}
+	response := httptest.NewRecorder()
+	if err := h.setOIDCState(response, state); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/oauth/callback?state=state", nil)
+	request.AddCookie(response.Result().Cookies()[0])
+	got, err := h.readOIDCState(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != state {
+		t.Fatalf("state = %+v, want %+v", got, state)
+	}
+
+	tampered := *response.Result().Cookies()[0]
+	tampered.Value += "x"
+	tamperedRequest := httptest.NewRequest(http.MethodGet, "/oauth/callback?state=state", nil)
+	tamperedRequest.AddCookie(&tampered)
+	if _, err := h.readOIDCState(tamperedRequest); err == nil {
+		t.Fatal("tampered state cookie was accepted")
+	}
+}
+
+func TestOIDCLoginIsUnavailableWhenDisabled(t *testing.T) {
+	h := NewAuthHandler(config.Config{})
+	response := httptest.NewRecorder()
+	h.HandleOIDCLogin(response, httptest.NewRequest(http.MethodGet, "/oauth/login", nil))
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusNotFound)
+	}
+}
+
+func TestOIDCProfileTagsPersistAllDirectoryClaims(t *testing.T) {
+	tags := oidcProfileTags(oidcClaims{
+		Subject: "subject-1", RhatUUID: "11111111-1111-4111-8111-111111111111",
+		Username: "alice@example.com", Email: "alice@example.com",
+		GivenName: "Alice", FamilyName: "Example", Groups: []string{"GE", "platform"},
+		Country: "us", State: "ca", Region: "Americas", Manager: "manager-1",
+		CostCenter: "CC-1", CostCenterDescription: "Platform Engineering",
+		EmployeeType: "employee", Organization: "Technology", Active: true,
+		TerminationDate: "",
+	})
+	for _, key := range []string{
+		"email", "first_name", "last_name", "preferred_username", "oidc_sub", "rhat_uuid",
+		"country", "state", "region", "manager_rhat_uuid", "cost_center",
+		"cost_center_description", "employee_type", "organization", "oidc_active", "groups",
+	} {
+		if _, ok := tags[key]; !ok {
+			t.Errorf("OIDC profile tag %q missing from %#v", key, tags)
+		}
+	}
+	if tags["country"] != "US" || tags["state"] != "CA" {
+		t.Fatalf("location claims were not normalized: country=%v state=%v", tags["country"], tags["state"])
+	}
+}
+
+func TestOIDCProfileTagsUsePreferredUsernameAsEmailFallback(t *testing.T) {
+	tags := oidcProfileTags(oidcClaims{Username: "boss@example.com"})
+	if tags["email"] != "boss@example.com" {
+		t.Fatalf("preferred_username email fallback = %v; want boss@example.com", tags["email"])
+	}
+
+	tags = oidcProfileTags(oidcClaims{Username: "boss"})
+	if _, ok := tags["email"]; ok {
+		t.Fatalf("non-address preferred_username must not become tags.email: %#v", tags)
+	}
+
+	tags = oidcProfileTags(oidcClaims{Username: "alias@example.com", Email: "real@example.com"})
+	if tags["email"] != "real@example.com" {
+		t.Fatalf("explicit email claim lost to preferred_username fallback: %#v", tags)
+	}
+}
+
+// newTestOIDCHandler starts a minimal discovery document so InitOIDC succeeds.
+// The token and JWKS endpoints are never called by these tests.
+func newTestOIDCHandler(t *testing.T, testLogin bool) *AuthHandler {
+	t.Helper()
+	provider := httptest.NewServer(nil)
+	provider.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/.well-known/openid-configuration" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"issuer":"` + provider.URL + `","authorization_endpoint":"` + provider.URL + `/authorize","token_endpoint":"` + provider.URL + `/token","jwks_uri":"` + provider.URL + `/jwks"}`))
+	})
+	t.Cleanup(provider.Close)
+
+	h := NewAuthHandler(config.Config{OIDC: config.OIDC{
+		Enabled: true, DevelopmentMode: true, TestLogin: testLogin,
+		IssuerURL: provider.URL, ClientID: "client",
+		ClientSecret: "secret", RedirectURL: "https://dashboard.example/oauth/callback",
+		Scopes: []string{"openid", "profile", "email", "groups"},
+	}})
+	if err := h.InitOIDC(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	return h
+}
+
+func TestOIDCLoginForwardsPersonaOnlyWhenTestLoginEnabled(t *testing.T) {
+	tests := []struct {
+		name      string
+		testLogin bool
+		query     string
+		wantHint  bool
+	}{
+		{name: "test login enabled", testLogin: true, query: "?persona=new-user", wantHint: true},
+		{name: "test login disabled", testLogin: false, query: "?persona=new-user", wantHint: false},
+		{name: "invalid persona ignored", testLogin: true, query: "?persona=NEW%20USER", wantHint: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newTestOIDCHandler(t, tc.testLogin)
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodGet, "/oauth/login"+tc.query, nil)
+			request.Host = "localhost:8080"
+			h.HandleOIDCLogin(response, request)
+			if response.Code != http.StatusFound {
+				t.Fatalf("status = %d, want %d", response.Code, http.StatusFound)
+			}
+			location := response.Header().Get("Location")
+			hasHint := strings.Contains(location, "login_hint=")
+			if hasHint != tc.wantHint {
+				t.Fatalf("login_hint present = %v, want %v: %s", hasHint, tc.wantHint, location)
+			}
+			if tc.wantHint && !strings.Contains(location, "login_hint=new-user") {
+				t.Fatalf("authorization URL missing persona hint: %s", location)
+			}
+		})
+	}
+}
+
+func TestLoginPageTestPanelDoesNotChangeSSOLink(t *testing.T) {
+	const ssoLink = `<a class="sso-button" href="/oauth/login">Sign in with Red Hat SSO</a>`
+
+	enabled := newTestOIDCHandler(t, true)
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/login", nil)
+	request.Host = "localhost:8080"
+	enabled.HandleLogin(response, request)
+	body := response.Body.String()
+	if !strings.Contains(body, ssoLink) {
+		t.Fatalf("SSO link changed or missing from login page:\n%s", body)
+	}
+	if !strings.Contains(body, "Test sign-in") || !strings.Contains(body, "/oauth/login?persona=new-user") {
+		t.Fatalf("test-login panel missing when enabled:\n%s", body)
+	}
+	if strings.Contains(body, "<!-- TEST_LOGIN -->") {
+		t.Fatal("test-login placeholder was not replaced")
+	}
+
+	disabled := newTestOIDCHandler(t, false)
+	response = httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodGet, "/login", nil)
+	request.Host = "localhost:8080"
+	disabled.HandleLogin(response, request)
+	body = response.Body.String()
+	if !strings.Contains(body, ssoLink) {
+		t.Fatalf("SSO link changed or missing from login page:\n%s", body)
+	}
+	if strings.Contains(body, "Test sign-in") || strings.Contains(body, "<!-- TEST_LOGIN -->") {
+		t.Fatalf("test-login panel leaked when disabled:\n%s", body)
+	}
+}
+
+func TestLoginPageTestPanelIsLocalOnly(t *testing.T) {
+	enabled := newTestOIDCHandler(t, true)
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/login", nil)
+	request.Host = "dashboard.enmaas.devshift.net"
+	enabled.HandleLogin(response, request)
+	if body := response.Body.String(); strings.Contains(body, "Test sign-in") {
+		t.Fatal("test-login persona panel leaked to a non-loopback host")
+	}
+}
+
+func TestOIDCLoginBuildsAuthorizationCodePKCERequest(t *testing.T) {
+	t.Setenv("SESSION_SECRET", "test-session-secret")
+	provider := httptest.NewServer(nil)
+	provider.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/.well-known/openid-configuration" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"issuer":"` + provider.URL + `","authorization_endpoint":"` + provider.URL + `/authorize","token_endpoint":"` + provider.URL + `/token","jwks_uri":"` + provider.URL + `/jwks"}`))
+	})
+	defer provider.Close()
+
+	h := NewAuthHandler(config.Config{OIDC: config.OIDC{
+		Enabled: true, IssuerURL: provider.URL, ClientID: "client",
+		ClientSecret: "secret", RedirectURL: "https://dashboard.example/oauth/callback",
+		Scopes: []string{"openid", "profile", "email", "groups"},
+	}})
+	if err := h.InitOIDC(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	h.HandleOIDCLogin(response, httptest.NewRequest(http.MethodGet, "/oauth/login", nil))
+	if response.Code != http.StatusFound {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusFound)
+	}
+	location := response.Header().Get("Location")
+	for _, required := range []string{"client_id=client", "redirect_uri=", "code_challenge=", "code_challenge_method=S256", "nonce=", "state="} {
+		if !strings.Contains(location, required) {
+			t.Fatalf("authorization URL missing %q: %s", required, location)
+		}
+	}
+	if len(response.Result().Cookies()) != 1 || response.Result().Cookies()[0].Name != oidcStateCookie {
+		t.Fatalf("expected signed OIDC state cookie, got %v", response.Result().Cookies())
+	}
+}

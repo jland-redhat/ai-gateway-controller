@@ -1,0 +1,24 @@
+[Unit]
+Description=PriceTag LDAP directory sync (VPN-connected host)
+Documentation=https://github.com/redhat-et/pricetag-metering/tree/main/deploy/ldap-sync
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pricetag-ldap-sync
+Group=pricetag-ldap-sync
+EnvironmentFile=/etc/pricetag-ldap-sync/env
+Environment=LDAP_SYNC_SCRIPT=/opt/pricetag-metering/scripts/sync-ldap-cost-centers.sh
+ExecStart=/opt/pricetag-metering/deploy/ldap-sync/run-service.sh
+Restart=always
+RestartSec=30
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/pricetag-ldap-sync
+
+[Install]
+WantedBy=multi-user.target

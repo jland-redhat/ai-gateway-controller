@@ -1,0 +1,282 @@
+package maasapi
+
+import (
+	"bytes"
+	"context"
+	"crypto/tls"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/url"
+	"os"
+	"strings"
+	"time"
+)
+
+type Client struct {
+	baseURL string
+	tenant  string
+	client  *http.Client
+}
+
+type APIKeyResponse struct {
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	Key            string `json:"key,omitempty"`
+	Username       string `json:"username"`
+	Subscription   string `json:"subscription"`
+	Tenant         string `json:"tenant"`
+	Status         string `json:"status"`
+	CreationDate   string `json:"creationDate,omitempty"`
+	ExpirationDate string `json:"expirationDate,omitempty"`
+	LastUsedAt     string `json:"lastUsedAt,omitempty"`
+}
+
+type SearchResult struct {
+	Object  string           `json:"object"`
+	Data    []APIKeyResponse `json:"data"`
+	HasMore bool             `json:"has_more"`
+}
+
+func NewClient(baseURL, tenant string) *Client {
+	return &Client{
+		baseURL: baseURL,
+		tenant:  tenant,
+		client: &http.Client{
+			Timeout: 10 * time.Second,
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			},
+		},
+	}
+}
+
+// CreateKeyRequest is the self-service key shape. ExpiresIn is a Go duration
+// string ("2160h"); an empty value means the MaaS deployment default.
+type CreateKeyRequest struct {
+	Name         string            `json:"name"`
+	Description  string            `json:"description,omitempty"`
+	Subscription string            `json:"subscription,omitempty"`
+	ExpiresIn    string            `json:"expiresIn,omitempty"`
+	Labels       map[string]string `json:"labels,omitempty"`
+}
+
+func (c *Client) CreateAPIKey(ctx context.Context, username, group, keyName string) (*APIKeyResponse, error) {
+	return c.CreateUserAPIKey(ctx, username, group, CreateKeyRequest{Name: keyName})
+}
+
+// CreateUserAPIKey mints a key for one user with optional expiry and labels.
+// The identity headers are the trusted-header contract described in the
+// Atlas handoff; the caller must be a server-side handler, never a browser.
+func (c *Client) CreateUserAPIKey(ctx context.Context, username, group string, req CreateKeyRequest) (*APIKeyResponse, error) {
+	username = strings.TrimSpace(username)
+	body, _ := json.Marshal(req)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/api-keys", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("X-MaaS-Username", username)
+	groupJSON, err := json.Marshal([]string{group})
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("X-MaaS-Group", string(groupJSON))
+	httpReq.Header.Set("X-MaaS-Tenant", c.tenant)
+
+	resp, err := c.client.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("maas-api request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	data, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		// Never put the upstream response body in an error: handlers log errors,
+		// and MaaS bodies can echo request context or key material.
+		return nil, fmt.Errorf("maas-api key create failed with status %d", resp.StatusCode)
+	}
+
+	var result APIKeyResponse
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	// MaaS intentionally returns the one-time secret from create, but some
+	// versions omit metadata that is only populated by the subsequent list
+	// representation. Complete only fields this request knows authoritatively
+	// so create and list expose a consistent resource without a second MaaS
+	// round trip. Never overwrite richer metadata if MaaS starts returning it.
+	if result.Username == "" {
+		result.Username = username
+	}
+	if result.Tenant == "" {
+		result.Tenant = c.tenant
+	}
+	if result.Status == "" {
+		result.Status = "active"
+	}
+	return &result, nil
+}
+
+// ListUserAPIKeys lists a user's own keys by presenting that username to
+// MaaS, which scopes non-admin searches to the caller. Pages are walked until
+// MaaS reports no more results.
+func (c *Client) ListUserAPIKeys(ctx context.Context, username, group string) ([]APIKeyResponse, error) {
+	username = strings.TrimSpace(username)
+	if username == "" || group == "" {
+		return nil, fmt.Errorf("maas-api key list requires a username and group")
+	}
+	groupJSON, err := json.Marshal([]string{group})
+	if err != nil {
+		return nil, err
+	}
+	const pageSize = 100
+	keys := []APIKeyResponse{}
+	for offset := 0; offset <= 10*pageSize; offset += pageSize {
+		body, err := json.Marshal(map[string]any{
+			"filters":    map[string]any{"username": username},
+			"pagination": map[string]int{"limit": pageSize, "offset": offset},
+		})
+		if err != nil {
+			return nil, err
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/api-keys/search", bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-MaaS-Username", username)
+		req.Header.Set("X-MaaS-Group", string(groupJSON))
+		req.Header.Set("X-MaaS-Tenant", c.tenant)
+		resp, err := c.client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("maas-api key list request failed: %w", err)
+		}
+		data, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode >= http.StatusBadRequest {
+			return nil, fmt.Errorf("maas-api key list failed with status %d", resp.StatusCode)
+		}
+		var page SearchResult
+		if err := json.Unmarshal(data, &page); err != nil {
+			return nil, fmt.Errorf("failed to parse key list: %w", err)
+		}
+		keys = append(keys, page.Data...)
+		if !page.HasMore {
+			break
+		}
+	}
+	return keys, nil
+}
+
+// RevokeUserAPIKey revokes one key as its owner and returns the MaaS status.
+// MaaS answers 404 for keys the presented username does not own.
+func (c *Client) RevokeUserAPIKey(ctx context.Context, keyID, username, group string) (int, error) {
+	username = strings.TrimSpace(username)
+	keyID = strings.TrimSpace(keyID)
+	if username == "" || group == "" || keyID == "" {
+		return 0, fmt.Errorf("maas-api key revoke requires a key id, username, and group")
+	}
+	groupJSON, err := json.Marshal([]string{group})
+	if err != nil {
+		return 0, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.baseURL+"/v1/api-keys/"+url.PathEscape(keyID), nil)
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("X-MaaS-Username", username)
+	req.Header.Set("X-MaaS-Group", string(groupJSON))
+	req.Header.Set("X-MaaS-Tenant", c.tenant)
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("maas-api key revoke request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode, nil
+}
+
+func (c *Client) SearchAPIKeys(ctx context.Context, username string, groups []string) (*SearchResult, error) {
+	searchBody := map[string]any{}
+	if username != "" {
+		searchBody["username"] = username
+	}
+	body, _ := json.Marshal(searchBody)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/api-keys/search", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	// maas-api's auth middleware requires a non-empty X-MaaS-Group on every
+	// v1 call: it scopes the internal token it mints for the request and
+	// 500s (AUTH_FAILURE) without one. Fail locally with a message that
+	// names the real problem instead of shipping a doomed request.
+	if len(groups) == 0 {
+		return nil, fmt.Errorf("maas-api search: no groups to scope the request — check the MaaSSubscription groups")
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-MaaS-Username", "admin")
+	req.Header.Set("X-MaaS-Tenant", c.tenant)
+	groupJSON, _ := json.Marshal(groups)
+	req.Header.Set("X-MaaS-Group", string(groupJSON))
+	if token := saToken(); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("maas-api request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	data, _ := io.ReadAll(resp.Body)
+	slog.Info("maas-api search response", "status", resp.StatusCode)
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("maas-api key search failed with status %d", resp.StatusCode)
+	}
+
+	var result SearchResult
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	return &result, nil
+}
+
+func (c *Client) RevokeAPIKey(ctx context.Context, keyID string, groups []string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.baseURL+"/v1/api-keys/"+keyID, nil)
+	if err != nil {
+		return err
+	}
+	// See SearchAPIKeys: the group header is mandatory on every v1 call.
+	if len(groups) == 0 {
+		return fmt.Errorf("maas-api revoke: no groups to scope the request — check the MaaSSubscription groups")
+	}
+	req.Header.Set("X-MaaS-Username", "admin")
+	req.Header.Set("X-MaaS-Tenant", c.tenant)
+	groupJSON, _ := json.Marshal(groups)
+	req.Header.Set("X-MaaS-Group", string(groupJSON))
+	if token := saToken(); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("maas-api request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("maas-api key revoke failed with status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+func saToken() string {
+	data, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/token")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
