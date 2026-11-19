@@ -647,11 +647,20 @@ why and links upstream tracking where it exists.
 
 ### Repos touched
 
-- **ai-gateway-controller** (branch `early-praxis-policy-engine-ppe`):
-  annotation plumbing, EnvoyFilter variant, `policy.yaml` ConfigMap
-  rendering, hand-written tenant policy.
+- **ai-gateway-controller** (branch
+  [early-praxis-policy-engine-ppe](https://github.com/jland-redhat/ai-gateway-controller/tree/early-praxis-policy-engine-ppe)):
+  `policy-engine: ppe` annotation, PPE policy rendering into the plugins
+  ConfigMap, chain injection + collapse to a single ExtProc Deployment,
+  EnvoyFilter ipp-pre patch removal, netpol egress + gateway label +
+  service-CA mount in the render path, praxis 0.8.0 validation shims.
+- **praxis-extproc** (fork branch
+  [early-praxis-policy-engine-ppe](https://github.com/jland-redhat/praxis-extproc/tree/early-praxis-policy-engine-ppe)):
+  praxis 0.7.4 → 0.8.0 and praxis-ai v0.9.0 → v0.11.0 (PPE 0.6.0 with
+  `rate_limits`), `policy-engine` + `policy-experimental-ratelimit`
+  features, `panic = "unwind"` (Limitador requirement). The stock
+  odh-praxis-extproc image is the FIPS build and **excludes** the policy
+  filter — a custom non-FIPS image is required (`quay.io/maas/praxis-extproc:ppe`).
 - **models-as-a-service**: install only (full platform install for the
   cluster); no code changes required for the POC.
-- **praxis-extproc / praxis-proxy**: no changes required — `policy`
-  filter ships in the default feature set. Image must be a build
-  carrying `policy-engine` (check the pinned digest).
+- Companion gist (validation instructions + results):
+  https://gist.github.com/jland-redhat/eb2b5e7b1abb5829d5bb006b1bc6c5b4
